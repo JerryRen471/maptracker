@@ -18,7 +18,9 @@ test -s "${PROCESSED_DIR}/val_infos.pkl"
 test -s "${PROCESSED_DIR}/conversion_stats.json"
 
 source /root/miniconda3/etc/profile.d/conda.sh
+set +u
 conda activate waymo_pack
+set -u
 python - <<'PY'
 import json
 import pickle
@@ -52,7 +54,9 @@ print("FULL_CONVERSION_VERIFIED")
 PY
 
 rm -rf "${MAPTRACKER_DIR}"
+set +u
 conda activate maptracker
+set -u
 python pack_waymo_for_maptracker.py \
     --v3-dir "${PROCESSED_DIR}" \
     --out-dir "${MAPTRACKER_DIR}"
