@@ -390,7 +390,7 @@ match_config = dict(
 # dataset configs
 data = dict(
     samples_per_gpu=batch_size,
-    workers_per_gpu=8,
+    workers_per_gpu=2,
     train=dict(
         type='WaymoMapDataset',
         ann_file='/data/waymo_maptracker_xm15_x45_y15/waymo_map_infos_train.pkl',

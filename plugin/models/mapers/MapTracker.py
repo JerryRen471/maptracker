@@ -704,7 +704,6 @@ class MapTracker(BaseMapper):
         for idx in range(bs):
             num_gts.append(sum([len(v) for k, v in vectors[idx].items()]))
         valid_idx = [i for i in range(bs) if num_gts[i] > 0]
-        assert len(valid_idx) == bs # make sure every sample has gts
 
         all_labels_list = []
         all_lines_list = []
@@ -729,7 +728,13 @@ class MapTracker(BaseMapper):
                         assert False
 
             all_labels_list.append(torch.tensor(labels, dtype=torch.long).to(device))
-            all_lines_list.append(torch.stack(lines).float().to(device))
+            if lines:
+                lines_tensor = torch.stack(lines).float().to(device)
+            else:
+                line_dim = self.head.num_points * self.head.coord_dim
+                lines_tensor = torch.empty(
+                    (0, line_dim), dtype=torch.float32, device=device)
+            all_lines_list.append(lines_tensor)
             all_gt2local.append(gt2local)
             all_local2gt.append(local2gt)
 
