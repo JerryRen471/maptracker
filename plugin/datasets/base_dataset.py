@@ -11,6 +11,8 @@ from mmcv.parallel import DataContainer as DC
 import warnings
 import pickle
 
+from plugin.roi import resolve_roi
+
 
 warnings.filterwarnings("ignore")
 
@@ -44,6 +46,7 @@ class BaseMapDataset(Dataset):
                  sampling_span=10,
                  matching=False,
                  eval_semantic=False,
+                 roi_range=None,
         ):
         super().__init__()
         self.ann_file = ann_file
@@ -80,7 +83,8 @@ class BaseMapDataset(Dataset):
         # dummy flags to fit with mmdet dataset
         self.flag = np.zeros(len(self), dtype=np.uint8)
 
-        self.roi_size = roi_size
+        self.roi_range, resolved_roi_size = resolve_roi(roi_size, roi_range)
+        self.roi_size = tuple(resolved_roi_size.tolist())
         
         self.work_dir = work_dir
         self.eval_config = eval_config
@@ -222,7 +226,7 @@ class BaseMapDataset(Dataset):
                         'track_vectors': [], 'track_scores': [], 'track_labels': []}
                 token = pred['token']
                 roi_size = np.array(self.roi_size)
-                origin = -np.array([self.roi_size[0]/2, self.roi_size[1]/2])
+                origin = self.roi_range[:2]
                 
                 # save the extra semantic info
                 if save_semantic:
@@ -491,4 +495,3 @@ class BaseMapDataset(Dataset):
             data['all_local2global_info'] = all_local2global_info
         
         return data
-

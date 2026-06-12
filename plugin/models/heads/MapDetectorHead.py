@@ -14,6 +14,8 @@ from mmdet.models.utils.transformer import inverse_sigmoid
 
 from einops import rearrange
 
+from plugin.roi import resolve_roi
+
 @HEADS.register_module(force=True)
 class MapDetectorHead(nn.Module):
 
@@ -32,6 +34,7 @@ class MapDetectorHead(nn.Module):
                  sync_cls_avg_factor=True,
                  bg_cls_weight=0.,
                  trans_loss_weight=0.0,
+                 roi_range=None,
                  transformer=dict(),
                  loss_cls=dict(),
                  loss_reg=dict(),
@@ -55,8 +58,10 @@ class MapDetectorHead(nn.Module):
         # NOTE: below is a simple MLP to transform the query from prev-frame to cur-frame,
         # we moved the propagation part outside,
             
-        self.register_buffer('roi_size', torch.tensor(roi_size, dtype=torch.float32))
-        origin = (-roi_size[0]/2, -roi_size[1]/2)
+        roi_range, roi_size = resolve_roi(roi_size, roi_range)
+        self.register_buffer(
+            'roi_size', torch.tensor(roi_size, dtype=torch.float32))
+        origin = roi_range[:2]
         self.register_buffer('origin', torch.tensor(origin, dtype=torch.float32))
 
         sampler_cfg = dict(type='PseudoSampler')

@@ -34,10 +34,11 @@ cat2id = {
 num_class = max(list(cat2id.values())) + 1
 
 # bev configs
-roi_size = (30, 60) # bev range, 30m in x-axis (Waymo forward), 60m in y-axis (lateral)
-bev_h = 100
-bev_w = 50
-pc_range = [-roi_size[0]/2, -roi_size[1]/2, -3, roi_size[0]/2, roi_size[1]/2, 5]
+roi_range = (-15, -15, 45, 15) # x: 15m rear to 45m front; y: 15m each side
+roi_size = (60, 30)
+bev_h = 50
+bev_w = 100
+pc_range = [roi_range[0], roi_range[1], -3, roi_range[2], roi_range[3], 5]
 
 # vectorize params
 coords_dim = 2
@@ -46,7 +47,7 @@ sample_num = -1
 simplify = True
 
 # rasterize params (for temporal matching use)
-canvas_size = (100, 200) # bev feature size for rasterization
+canvas_size = (200, 100) # bev feature size for rasterization
 thickness = 3 # thickness of rasterized polylines
 
 # meta info for submission pkl
@@ -70,6 +71,7 @@ permute = True
 model = dict(
     type='MapTracker',
     roi_size=roi_size,
+    roi_range=roi_range,
     bev_h=bev_h,
     bev_w=bev_w,
     history_steps=4,
@@ -84,6 +86,7 @@ model = dict(
     backbone_cfg=dict(
         type='BEVFormerBackbone',
         roi_size=roi_size,
+        roi_range=roi_range,
         bev_h=bev_h,
         bev_w=bev_w,
         use_grid_mask=True,
@@ -165,6 +168,7 @@ model = dict(
         in_channels=bev_embed_dims,
         num_points=num_points,
         roi_size=roi_size,
+        roi_range=roi_range,
         coord_dim=2,
         different_heads=False,
         predict_refine=False,
@@ -274,6 +278,7 @@ train_pipeline = [
         type='VectorizeMap',
         coords_dim=coords_dim,
         roi_size=roi_size,
+        roi_range=roi_range,
         sample_num=num_points,
         normalize=True,
         permute=permute,
@@ -281,6 +286,7 @@ train_pipeline = [
     dict(
         type='RasterizeMap',
         roi_size=roi_size,
+        roi_range=roi_range,
         coords_dim=coords_dim,
         canvas_size=canvas_size,
         thickness=thickness,
@@ -327,9 +333,10 @@ test_pipeline = [
 # DO NOT CHANGE
 eval_config = dict(
     type='WaymoMapDataset',
-    ann_file='/data/waymo_maptracker/waymo_map_infos_val.pkl',
+    ann_file='/data/waymo_maptracker_xm15_x45_y15/waymo_map_infos_val.pkl',
     meta=meta,
     roi_size=roi_size,
+    roi_range=roi_range,
     cat2id=cat2id,
     pipeline=[
         dict(
@@ -337,7 +344,8 @@ eval_config = dict(
             coords_dim=coords_dim,
             simplify=True,
             normalize=False,
-            roi_size=roi_size
+            roi_size=roi_size,
+            roi_range=roi_range,
         ),
         dict(type='FormatBundleMap'),
         dict(type='Collect3D', keys=['vectors',], meta_keys=['token', 'ego2img', 'sample_idx', 'ego2global_translation',
@@ -349,9 +357,10 @@ eval_config = dict(
 
 match_config = dict(
     type='WaymoMapDataset',
-    ann_file='/data/waymo_maptracker/waymo_map_infos_val.pkl',
+    ann_file='/data/waymo_maptracker_xm15_x45_y15/waymo_map_infos_val.pkl',
     meta=meta,
     roi_size=roi_size,
+    roi_range=roi_range,
     cat2id=cat2id,
     pipeline=[
         dict(
@@ -360,11 +369,13 @@ match_config = dict(
             simplify=False,
             normalize=True,
             roi_size=roi_size,
+            roi_range=roi_range,
             sample_num=num_points,
         ),
         dict(
             type='RasterizeMap',
             roi_size=roi_size,
+            roi_range=roi_range,
             coords_dim=coords_dim,
             canvas_size=canvas_size,
             thickness=thickness,
@@ -382,9 +393,10 @@ data = dict(
     workers_per_gpu=8,
     train=dict(
         type='WaymoMapDataset',
-        ann_file='/data/waymo_maptracker/waymo_map_infos_train.pkl',
+        ann_file='/data/waymo_maptracker_xm15_x45_y15/waymo_map_infos_train.pkl',
         meta=meta,
         roi_size=roi_size,
+        roi_range=roi_range,
         cat2id=cat2id,
         pipeline=train_pipeline,
         seq_split_num=-2,
@@ -394,9 +406,10 @@ data = dict(
     ),
     val=dict(
         type='WaymoMapDataset',
-        ann_file='/data/waymo_maptracker/waymo_map_infos_val.pkl',
+        ann_file='/data/waymo_maptracker_xm15_x45_y15/waymo_map_infos_val.pkl',
         meta=meta,
         roi_size=roi_size,
+        roi_range=roi_range,
         cat2id=cat2id,
         pipeline=test_pipeline,
         eval_config=eval_config,
@@ -406,9 +419,10 @@ data = dict(
     ),
     test=dict(
         type='WaymoMapDataset',
-        ann_file='/data/waymo_maptracker/waymo_map_infos_val.pkl',
+        ann_file='/data/waymo_maptracker_xm15_x45_y15/waymo_map_infos_val.pkl',
         meta=meta,
         roi_size=roi_size,
+        roi_range=roi_range,
         cat2id=cat2id,
         pipeline=test_pipeline,
         eval_config=eval_config,
@@ -456,4 +470,4 @@ log_config = dict(
 
 SyncBN = True
 
-load_from = '/data/maptr_workspace/work_dirs/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain/latest.pth'
+load_from = '/data/maptr_workspace/work_dirs/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_asym_roi/latest.pth'

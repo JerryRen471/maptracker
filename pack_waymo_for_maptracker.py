@@ -143,9 +143,9 @@ def main():
     parser.add_argument('--out-dir', default='/data/waymo_maptracker')
     parser.add_argument(
         '--img-root',
-        default='/data/waymo_processed_v3',
-        help='Joined to cams[*].data_path. Leave empty if data_path '
-             'is already an absolute path.')
+        default=None,
+        help='Joined to cams[*].data_path. Defaults to metadata.image_root '
+             'from each input pkl.')
     parser.add_argument('--info-prefix', default='waymo')
     args = parser.parse_args()
 
@@ -160,11 +160,15 @@ def main():
         with open(in_path, 'rb') as f:
             v3 = pickle.load(f)
 
-        samples = convert_split(v3['infos'], args.img_root, split)
+        metadata = v3.get('metadata', {})
+        img_root = args.img_root
+        if img_root is None:
+            img_root = metadata.get('image_root', args.v3_dir)
+        samples = convert_split(v3['infos'], img_root, split)
 
         # id2map kept as empty dict — WaymoDataset overrides get_sample()
         # to bypass map_extractor and read polylines directly from each sample.
-        out = dict(samples=samples, id2map={})
+        out = dict(samples=samples, id2map={}, metadata=metadata)
         print(f'writing {out_path}')
         with open(out_path, 'wb') as f:
             pickle.dump(out, f, protocol=pickle.HIGHEST_PROTOCOL)

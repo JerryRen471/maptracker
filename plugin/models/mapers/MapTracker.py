@@ -16,6 +16,7 @@ from einops import rearrange, repeat
 from scipy.spatial.transform import Rotation as R
 
 from .vector_memory import VectorInstanceMemory
+from plugin.roi import resolve_roi
 
 
 @MAPPERS.register_module()
@@ -25,6 +26,7 @@ class MapTracker(BaseMapper):
                  bev_h,
                  bev_w,
                  roi_size,
+                 roi_range=None,
                  backbone_cfg=dict(),
                  head_cfg=dict(),
                  neck_cfg=None,
@@ -74,7 +76,9 @@ class MapTracker(BaseMapper):
         # BEV 
         self.bev_h = bev_h
         self.bev_w = bev_w
-        self.roi_size = roi_size
+        roi_range, roi_size = resolve_roi(roi_size, roi_range)
+        self.roi_size = tuple(float(v) for v in roi_size)
+        self.roi_range = tuple(float(v) for v in roi_range)
         self.history_steps = history_steps
 
         self.mem_len = mem_len
@@ -96,8 +100,7 @@ class MapTracker(BaseMapper):
                 mem_select_dist_ranges=self.mem_select_dist_ranges,
             )
 
-        xmin, xmax = -roi_size[0]/2, roi_size[0]/2
-        ymin, ymax = -roi_size[1]/2, roi_size[1]/2
+        xmin, ymin, xmax, ymax = roi_range
         x = torch.linspace(xmin, xmax, bev_w)
         y = torch.linspace(ymax, ymin, bev_h)
         y, x = torch.meshgrid(y, x)
@@ -330,9 +333,12 @@ class MapTracker(BaseMapper):
 
             history_coord = torch.einsum('nlk,ijk->nijl', history_curr2prev_matrix, self.plane).float()[..., :2]
 
-            # from (-30, 30) or (-15, 15) to (-1, 1)
-            history_coord[..., 0] = history_coord[..., 0] / (self.roi_size[0]/2)
-            history_coord[..., 1] = -history_coord[..., 1] / (self.roi_size[1]/2)
+            history_coord[..., 0] = (
+                (history_coord[..., 0] - self.roi_range[0])
+                / self.roi_size[0] * 2 - 1)
+            history_coord[..., 1] = -(
+                (history_coord[..., 1] - self.roi_range[1])
+                / self.roi_size[1] * 2 - 1)
 
             all_history_curr2prev.append(history_curr2prev_matrix)
             all_history_prev2curr.append(history_prev2curr_matrix)
@@ -953,18 +959,18 @@ class MapTracker(BaseMapper):
     
     def _denorm_lines(self, line_pts):
         """from (0,1) to the BEV space in meters"""
-        line_pts[..., 0] = line_pts[..., 0] * self.roi_size[0] \
-                        - self.roi_size[0] / 2 
-        line_pts[..., 1] = line_pts[..., 1] * self.roi_size[1] \
-                        - self.roi_size[1] / 2 
+        line_pts[..., 0] = (
+            line_pts[..., 0] * self.roi_size[0] + self.roi_range[0])
+        line_pts[..., 1] = (
+            line_pts[..., 1] * self.roi_size[1] + self.roi_range[1])
         return line_pts
 
     def _norm_lines(self, line_pts):
         """from the BEV space in meters to (0,1) """
-        line_pts[..., 0] = (line_pts[..., 0] + self.roi_size[0] / 2) \
-                                        / self.roi_size[0] 
-        line_pts[..., 1] = (line_pts[..., 1] + self.roi_size[1] / 2) \
-                                        / self.roi_size[1] 
+        line_pts[..., 0] = (
+            line_pts[..., 0] - self.roi_range[0]) / self.roi_size[0]
+        line_pts[..., 1] = (
+            line_pts[..., 1] - self.roi_range[1]) / self.roi_size[1]
         return line_pts
 
     def _process_track_query_info(self, track_info):

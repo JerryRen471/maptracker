@@ -14,6 +14,9 @@ from logging import Logger
 from mmcv import Config
 from copy import deepcopy
 import os
+import hashlib
+
+from plugin.roi import roi_cache_tag
 
 INTERP_NUM = 200 # number of points to interpolate during evaluation
 THRESHOLDS = [0.5, 1.0, 1.5] # AP thresholds
@@ -47,15 +50,13 @@ class VectorEvaluate(object):
         
     @cached_property
     def gts(self) -> Dict[str, Dict[int, List[NDArray]]]:
-        roi_size = self.dataset.roi_size
-        if 'av2' in self.dataset.ann_file:
-            dataset = 'av2'
-        else:
-            dataset = 'nusc'
-        if self.new_split:
-            tmp_file = f'./tmp_gts_{dataset}_{roi_size[0]}x{roi_size[1]}_newsplit.pkl'
-        else:
-            tmp_file = f'./tmp_gts_{dataset}_{roi_size[0]}x{roi_size[1]}.pkl'
+        ann_file = os.path.abspath(self.dataset.ann_file)
+        ann_hash = hashlib.sha1(ann_file.encode()).hexdigest()[:10]
+        roi_tag = roi_cache_tag(self.dataset.roi_range)
+        split_tag = '_newsplit' if self.new_split else ''
+        tmp_file = (
+            f'./tmp_gts_{self.dataset.__class__.__name__}_'
+            f'{roi_tag}_{ann_hash}{split_tag}.pkl')
         if os.path.exists(tmp_file):
             print(f'loading cached gts from {tmp_file}')
             gts = mmcv.load(tmp_file)
