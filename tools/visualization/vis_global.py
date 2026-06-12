@@ -1165,11 +1165,15 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     last_index = index_list[-1]
     for index in index_list:
         
-        vectors = np.array(pred_results[index]["vectors"]).reshape((len(np.array(pred_results[index]["vectors"])), 20, 2))
-        if abs(vectors.max()) <= 1:
-            curr_vectors = vectors * roi_size + origin
+        vectors_raw = np.array(pred_results[index]["vectors"])
+        if len(vectors_raw) == 0:
+            curr_vectors = np.zeros((0, 20, 2))
         else:
-            curr_vectors = vectors
+            vectors = vectors_raw.reshape((len(vectors_raw), 20, 2))
+            if abs(vectors.max()) <= 1:
+                curr_vectors = vectors * roi_size + origin
+            else:
+                curr_vectors = vectors
             
         # get the transformation matrix of the last frame
         prev_e2g_trans =  torch.tensor(pred_results[index]['meta']['ego2global_translation'], dtype=torch.float64)

@@ -765,8 +765,8 @@ class MapTracker(BaseMapper):
     
     def _compute_cur2prev(self, gt2local_curr, gt2local_prev, local2gt_prev, 
                           local2global_curr, global2local_prev):
-        cur2prev = torch.zeros(len(gt2local_curr))
-        prev2cur = torch.zeros(len(gt2local_prev))
+        cur2prev = torch.zeros(len(gt2local_curr)).to(gt2local_curr.device if hasattr(gt2local_curr, "device") else "cuda")
+        prev2cur = torch.zeros(len(gt2local_prev)).to(gt2local_prev.device if hasattr(gt2local_prev, "device") else "cuda")
         prev2cur[:] = -1
         for gt_idx_curr in range(len(gt2local_curr)):
             label = gt2local_curr[gt_idx_curr][0]
@@ -841,7 +841,7 @@ class MapTracker(BaseMapper):
             not_prev_out_ind = torch.tensor([
                 ind.item()
                 for ind in not_prev_out_ind
-                if ind not in prev_out_ind and ind < pad_bound])
+                if ind not in prev_out_ind and ind < pad_bound]).to(device)
             
             # Get all non-matched pred with >0.5 conf score, serve as FP
             neg_scores = scores[not_prev_out_ind]
@@ -857,7 +857,7 @@ class MapTracker(BaseMapper):
 
             false_out_ind = not_prev_out_ind[fp_select_mask]
 
-            prev_out_ind_final = torch.tensor(prev_out_ind_filtered.tolist() + false_out_ind.tolist()).long()
+            prev_out_ind_final = torch.tensor(prev_out_ind_filtered.tolist() + false_out_ind.tolist()).long().to(device)
             target_ind_matching = torch.cat([
                 target_ind_matching,
                 torch.tensor([False, ] * len(false_out_ind)).bool().to(device)

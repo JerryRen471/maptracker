@@ -17,7 +17,7 @@ import os
 
 INTERP_NUM = 200 # number of points to interpolate during evaluation
 THRESHOLDS = [0.5, 1.0, 1.5] # AP thresholds
-N_WORKERS = 16 # num workers to parallel
+N_WORKERS = 2 # num workers to parallel
 SAMPLE_DIST = 0.15
 
 
@@ -36,10 +36,14 @@ class VectorEvaluate(object):
         self.n_workers = n_workers
         self.new_split = 'newsplit' in self.dataset.ann_file
         self.roi_size = self.dataset.roi_size
-        if self.roi_size == (60, 30):
+        if self.roi_size == (60, 30) or self.roi_size == (30, 60):
             self.thresholds = [0.5, 1.0, 1.5]
-        elif self.roi_size == (100, 50):
+        elif self.roi_size == (100, 50) or self.roi_size == (50, 100):
             self.thresholds = [1.0, 1.5, 2.0]
+        else:
+            # default for any other roi_size (Waymo etc.)
+            self.thresholds = [0.5, 1.0, 1.5]
+            print(f'[VectorEvaluate] roi_size={self.roi_size} not standard, using default thresholds [0.5, 1.0, 1.5]')
         
     @cached_property
     def gts(self) -> Dict[str, Dict[int, List[NDArray]]]:

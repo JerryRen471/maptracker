@@ -650,7 +650,7 @@ class MapDetectorHead(nn.Module):
         for i in range(bs):
             tmp_vectors = lines[i]
             # set up the prop_flags
-            tmp_prop_flags = torch.zeros(tmp_vectors.shape[0]).bool()
+            tmp_prop_flags = torch.zeros(tmp_vectors.shape[0]).bool().to(tmp_vectors.device)
             tmp_prop_flags[-100:] = 0
             tmp_prop_flags[:-100] = 1
             num_preds, num_points2 = tmp_vectors.shape
@@ -735,14 +735,14 @@ class MapDetectorHead(nn.Module):
         pos_scores = tmp_scores[pos]
 
         if first_frame:
-            global_ids = torch.arange(len(pos_vectors))
+            global_ids = torch.arange(len(pos_vectors)).to(pos_vectors.device)
             num_instance = len(pos_vectors)
         else:
             prop_ids = self.prop_info['global_ids']
             prop_num_instance = self.prop_info['num_instance']
             global_ids_track = prop_ids[pos_track]
             num_newborn = int(pos_det.sum())
-            global_ids_newborn = torch.arange(num_newborn) + prop_num_instance
+            global_ids_newborn = (torch.arange(num_newborn) + prop_num_instance).to(pos_vectors.device)
             global_ids = torch.cat([global_ids_track, global_ids_newborn])
             num_instance = prop_num_instance + num_newborn
             
