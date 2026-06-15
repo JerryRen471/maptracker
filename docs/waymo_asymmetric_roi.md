@@ -60,16 +60,30 @@ python tools/tracking/prepare_gt_tracks.py \
 
 ## 4. Train
 
-Use distinct work directories so checkpoints from the old symmetric ROI
-cannot be loaded accidentally.
+Use the training controller to launch detached jobs. It validates predecessor
+checkpoints, prevents duplicate runs, writes `stdout.log` in each work
+directory, and returns the background PID:
 
 ```bash
-CUDA_VISIBLE_DEVICES=4,5,6,7 PORT=29501 \
-bash tools/dist_train.sh \
-  plugin/configs/maptracker/waymo_5cam/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain.py \
-  4 \
-  --work-dir /data/maptr_workspace/work_dirs/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_asym_roi
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+bash tools/train_waymo_asym.sh start stage1
 ```
 
-Stage 2 and stage 3 configs load checkpoints from the corresponding
-`*_asym_roi` work directories.
+Launch or inspect individual stages:
+
+```bash
+bash tools/train_waymo_asym.sh start stage2
+bash tools/train_waymo_asym.sh status stage2
+bash tools/train_waymo_asym.sh logs stage2
+```
+
+Run all missing stages sequentially in a detached controller:
+
+```bash
+bash tools/train_waymo_asym.sh chain
+```
+
+`chain` skips stages that already completed successfully. Stage 2 starts only
+after the stage 1 checkpoint is valid, and stage 3 starts only after stage 2
+finishes successfully. Disconnecting SSH or VPN does not stop these background
+jobs.
