@@ -22,4 +22,8 @@ grep -q 'maptracker_waymo_5cam_5frame_span10_stage2_warmup_asym_roi' \
 grep -q 'PORT=29513' <<<"$dry_run_output"
 grep -q 'BACKGROUND_PID=' <<<"$dry_run_output"
 
+grep -q 'set +u' "$script"
+grep -q 'source "$CONDA_HOME/etc/profile.d/conda.sh"' "$script"
+grep -q 'set -u' "$script"
+
 echo "train_waymo_asym interface tests passed"

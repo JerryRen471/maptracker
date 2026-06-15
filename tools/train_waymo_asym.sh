@@ -133,8 +133,10 @@ run_stage() {
     work_dir="$(stage_work_dir "$stage")"
     port="$(stage_port "$stage")"
 
+    set +u
     source "$CONDA_HOME/etc/profile.d/conda.sh"
     conda activate "$CONDA_ENV"
+    set -u
     cd "$REPO_ROOT"
     export CUDA_VISIBLE_DEVICES="$GPUS"
     export PORT="$port"
