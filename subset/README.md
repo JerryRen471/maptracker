@@ -64,3 +64,50 @@ The config writes to:
 
 Use this experiment only to check whether the model can fit a tiny asymmetric
 ROI subset. It is not a validation-quality metric.
+
+## Front-Only ROI Variant
+
+The front-only variant uses:
+
+```text
+x=[0, 45], y=[-15, 15]
+```
+
+Prepare front-only data, pack it into MapTracker format, build the 6-scene
+overfit subset, and generate GT tracks:
+
+```bash
+bash subset/prepare_waymo_front_roi_overfit6.sh
+```
+
+Default outputs:
+
+```text
+/data/waymo_processed_x0_x45_y15
+/data/waymo_maptracker_x0_x45_y15
+/data/waymo_maptracker_x0_x45_y15_overfit6
+```
+
+For a quick converter dry run, set `LIMIT`:
+
+```bash
+LIMIT=6 NUM_WORKERS=1 bash subset/prepare_waymo_front_roi_overfit6.sh
+```
+
+Run front-only overfit training:
+
+```bash
+bash subset/train_front_roi_overfit6.sh
+```
+
+Equivalent explicit command:
+
+```bash
+python tools/train.py subset/debug_overfit6_stage1_front_roi.py --gpus 1
+```
+
+The front-only config writes to:
+
+```text
+/data/maptr_workspace/work_dirs/debug_overfit6_stage1_front_roi
+```
