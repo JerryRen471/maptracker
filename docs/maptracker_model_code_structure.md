@@ -27,9 +27,43 @@ self.memory_bank = VectorInstanceMemory(...)  # use_memory=True 时
 
 训练入口是 `MapTracker.forward_train()`，推理入口是 `MapTracker.forward_test()`。
 
+### 1.1 代码位置索引
+
+| 结构/流程 | 代码位置 |
+| --- | --- |
+| 模型组装 | `plugin/models/mapers/MapTracker.py`：`MapTracker.__init__()` |
+| 训练主流程 | `plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()` |
+| 推理主流程 | `plugin/models/mapers/MapTracker.py`：`MapTracker.forward_test()` |
+| GT 预处理 | `plugin/models/mapers/MapTracker.py`：`MapTracker.batch_data()` |
+| BEV backbone | `plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone` |
+| 图像特征提取 | `plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.extract_img_feat()` |
+| BEV feature 生成和 BEV memory fusion | `plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.forward()` |
+| 历史位姿和 BEV warp grid | `plugin/models/mapers/MapTracker.py`：`MapTracker.process_history_info()` |
+| BEV semantic segmentation | `plugin/models/heads/MapSegHead.py`：`MapSegHead` |
+| Vector detection head | `plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead` |
+| Vector head 训练 | `plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_train()` |
+| Vector head 推理 | `plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_test()` |
+| Vector decoder transformer | `plugin/models/transformer_utils/MapTransformer.py`：`MapTransformer`、`MapTransformerDecoder_new`、`MapTransformerLayer` |
+| Query propagation / PropMLP | `plugin/models/utils/query_update.py`：`MotionMLP` |
+| 跨帧 query 传播 | `plugin/models/mapers/MapTracker.py`：`MapTracker.temporal_propagate()` |
+| 两帧 GT 匹配 | `plugin/models/mapers/MapTracker.py`：`MapTracker.get_two_frame_matching()` |
+| Track query 构造 | `plugin/models/mapers/MapTracker.py`：`MapTracker.prepare_track_queries_and_targets()` |
+| Vector memory | `plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory` |
+| Memory 写入 | `plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory.update_memory()` |
+| Memory 变换和选择 | `plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory.trans_memory_bank()`、`VectorInstanceMemory.select_memory_entries()` |
+| Vector memory fusion | `plugin/models/transformer_utils/MapTransformer.py`：`MapTransformerLayer.forward()` 中第二个 `cross_attn` |
+| 推理结果后处理 | `plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.post_process()` |
+| 推理时序缓存 | `plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.prepare_temporal_propagation()`、`MapDetectorHead.get_track_info()` |
+| 主要模型配置 | `plugin/configs/maptracker/nuscenes_newsplit/maptracker_nusc_newsplit_5frame_span10_stage3_joint_finetune.py`：`model` |
+
 ## 2. 输入数据结构
 
 ### 2.1 当前帧输入
+
+代码位置：
+
+- `plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()`
+- `plugin/models/mapers/MapTracker.py`：`MapTracker.forward_test()`
 
 `MapTracker.forward_train()` 的主要输入：
 
@@ -51,6 +85,11 @@ all_local2global_info: List[Dict]
 - `img_metas[b]` 包含 `ego2global_translation`、`ego2global_rotation`、`token`、`local_idx`、camera calibration 等信息。
 
 ### 2.2 GT 预处理结构
+
+代码位置：
+
+- `plugin/models/mapers/MapTracker.py`：`MapTracker.batch_data()`
+- 调用位置：`MapTracker.forward_train()` 中当前帧和 `all_prev_data` 历史帧的预处理
 
 `batch_data()` 把 `vectors` 转成 `gts`：
 
@@ -79,12 +118,17 @@ README 中的 **BEV Module** 接收车载多视角图像特征、BEV memory buff
 
 对应代码：
 
-- `MapTracker.forward_train()`
-- `MapTracker.forward_test()`
-- `BEVFormerBackbone.forward()`
-- `MapTracker.process_history_info()`
+- `plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()`
+- `plugin/models/mapers/MapTracker.py`：`MapTracker.forward_test()`
+- `plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.forward()`
+- `plugin/models/mapers/MapTracker.py`：`MapTracker.process_history_info()`
 
 ### 3.1 图像特征提取
+
+代码位置：
+
+- `plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.extract_img_feat()`
+- 配置位置：`plugin/configs/maptracker/nuscenes_newsplit/maptracker_nusc_newsplit_5frame_span10_stage3_joint_finetune.py`：`backbone_cfg.img_backbone`、`backbone_cfg.img_neck`
 
 配置中 BEV backbone 包含 `ResNet + FPN + PerceptionTransformer`：
 
@@ -200,6 +244,12 @@ Tensor[B, N, C, H_i, W_i]
 
 ### 3.2 BEV Query 与 BEVFormer
 
+代码位置：
+
+- BEV query 定义：`plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone._init_layers()`
+- BEV feature 生成：`plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.forward()`
+- BEVFormer transformer 配置：`plugin/configs/maptracker/nuscenes_newsplit/maptracker_nusc_newsplit_5frame_span10_stage3_joint_finetune.py`：`backbone_cfg.transformer`
+
 `BEVFormerBackbone` 内部维护 BEV query：
 
 ```python
@@ -234,6 +284,12 @@ bev_feats: Tensor[B, 256, 50, 100]
 
 ### 3.3 BEV Memory Buffer
 
+代码位置：
+
+- 训练历史 BEV 缓存：`plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()`
+- 推理历史 BEV 缓存：`plugin/models/mapers/MapTracker.py`：`MapTracker.forward_test()`
+- 历史 BEV 使用：`plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.forward()`
+
 README 中的 BEV memory buffer 在代码里不是独立 class，而是用列表维护。
 
 训练时：
@@ -258,6 +314,12 @@ bev_feats: Tensor[B, 256, 50, 100]
 
 ### 3.4 Vehicle Motion 与 BEV Warping
 
+代码位置：
+
+- 位姿矩阵和 warp grid 计算：`plugin/models/mapers/MapTracker.py`：`MapTracker.process_history_info()`
+- BEV feature warp：`plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.forward()`
+- track query 几何变换：`plugin/models/mapers/MapTracker.py`：`MapTracker.temporal_propagate()`
+
 `process_history_info()` 根据当前帧和历史帧的 ego pose 计算运动变换：
 
 ```python
@@ -275,6 +337,11 @@ F.grid_sample(history_bev_feats_i, history_coord, ...)
 即把历史 BEV feature warp 到当前坐标系。
 
 ### 3.5 BEV Module 输出
+
+代码位置：
+
+- `plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.forward()`
+- `plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()` / `MapTracker.forward_test()` 中的 `self.backbone(...)` 和 `self.neck(...)`
 
 `self.backbone(...)` 输出：
 
@@ -295,8 +362,11 @@ README 图中 BEV Module 的输出一部分用于 semantic segmentation。
 
 对应代码：
 
-- `plugin/models/heads/MapSegHead.py`
-- `self.seg_decoder`
+- `plugin/models/heads/MapSegHead.py`：`MapSegHead`
+- 模型组装：`plugin/models/mapers/MapTracker.py`：`MapTracker.__init__()` 中的 `self.seg_decoder = build_head(seg_cfg)`
+- 训练调用：`plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()` 中的 `self.seg_decoder(...)`
+- 推理调用：`plugin/models/mapers/MapTracker.py`：`MapTracker.forward_test()` 中的 `self.seg_decoder(...)`
+- 配置位置：`plugin/configs/maptracker/nuscenes_newsplit/maptracker_nusc_newsplit_5frame_span10_stage3_joint_finetune.py`：`seg_cfg`
 
 配置：
 
@@ -342,15 +412,23 @@ README 中的 **VEC Module** 负责传播上一帧 vector latent、融合 vector
 
 对应代码：
 
-- `MapDetectorHead`
-- `MapTransformer`
-- `MapTransformerDecoder_new`
-- `MapTransformerLayer`
-- `MapTracker.temporal_propagate()`
-- `MotionMLP`
-- `VectorInstanceMemory`
+- `plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead`
+- `plugin/models/transformer_utils/MapTransformer.py`：`MapTransformer`
+- `plugin/models/transformer_utils/MapTransformer.py`：`MapTransformerDecoder_new`
+- `plugin/models/transformer_utils/MapTransformer.py`：`MapTransformerLayer`
+- `plugin/models/mapers/MapTracker.py`：`MapTracker.temporal_propagate()`
+- `plugin/models/utils/query_update.py`：`MotionMLP`
+- `plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory`
+- 配置位置：`plugin/configs/maptracker/nuscenes_newsplit/maptracker_nusc_newsplit_5frame_span10_stage3_joint_finetune.py`：`head_cfg`
 
 ### 5.1 Vector Head 构成
+
+代码位置：
+
+- Head 初始化：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.__init__()`
+- Query 和 reference point 初始化：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead._init_embedding()`
+- 分类/回归分支初始化：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead._init_branch()`
+- 模型组装：`plugin/models/mapers/MapTracker.py`：`MapTracker.__init__()` 中的 `self.head = build_head(head_cfg)`
 
 `self.head = build_head(head_cfg)`，配置类型是：
 
@@ -384,6 +462,12 @@ num_decoder_layers = 6
 
 ### 5.2 VEC Module 输入
 
+代码位置：
+
+- 训练入口：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_train()`
+- 推理入口：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_test()`
+- 调用位置：`plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()` / `MapTracker.forward_test()`
+
 输入给 `MapDetectorHead.forward_train()`：
 
 ```python
@@ -395,6 +479,13 @@ memory_bank: Optional[VectorInstanceMemory]
 ```
 
 ### 5.3 Query 数据结构
+
+代码位置：
+
+- 普通 detection query 构造：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_train()` / `MapDetectorHead.forward_test()`
+- track query 拼接：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_train()` / `MapDetectorHead.forward_test()`
+- track query 生成：`plugin/models/mapers/MapTracker.py`：`MapTracker.prepare_track_queries_and_targets()`
+- 推理时 track query 读取：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.get_track_info()`
 
 普通 detection query：
 
@@ -431,6 +522,13 @@ init_reference_points =
 ```
 
 ## 6. PropMLP / Query Propagation
+
+代码位置：
+
+- PropMLP 定义：`plugin/models/utils/query_update.py`：`MotionMLP`
+- PropMLP 组装：`plugin/models/mapers/MapTracker.py`：`MapTracker.__init__()` 中的 `self.query_propagate`
+- track query latent 传播：`plugin/models/mapers/MapTracker.py`：`MapTracker.temporal_propagate()`
+- vector memory latent 传播：`plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory.trans_memory_bank()`
 
 README 中的 PropMLP 对应：
 
@@ -470,6 +568,15 @@ track_query_info[b_i]['trans_track_query_boxes']
 ```
 
 ## 7. Vector Memory Buffer
+
+代码位置：
+
+- Memory 定义：`plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory`
+- Memory 初始化：`plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory.init_memory()`
+- Memory 写入：`plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory.update_memory()`
+- Memory 变换和当前帧准备：`plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory.trans_memory_bank()`
+- Memory entry 选择：`plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory.select_memory_entries()`
+- 训练/推理调用：`plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()` / `MapTracker.forward_test()`
 
 README 中的 vector memory buffer 对应：
 
@@ -520,6 +627,13 @@ valid_track_idx[b_i]: Tensor[num_valid_tracks]
 
 ## 8. Vector Memory Fusion Layer
 
+代码位置：
+
+- Decoder layer：`plugin/models/transformer_utils/MapTransformer.py`：`MapTransformerLayer.forward()`
+- Decoder sequence：`plugin/models/transformer_utils/MapTransformer.py`：`MapTransformerDecoder_new.forward()`
+- Transformer wrapper：`plugin/models/transformer_utils/MapTransformer.py`：`MapTransformer.forward()`
+- 配置位置：`plugin/configs/maptracker/nuscenes_newsplit/maptracker_nusc_newsplit_5frame_span10_stage3_joint_finetune.py`：`head_cfg.transformer.decoder.transformerlayers`
+
 README 中的 vector memory fusion 对应 `MapTransformerLayer.forward()` 中的第二个 `cross_attn`。
 
 配置中的 decoder layer 顺序：
@@ -557,6 +671,13 @@ query_i[:, valid_track_idx] = self.attentions[attn_index](
 只有有效 track query 会 attend 自己对应的历史 vector memory。
 
 ## 9. Vector Decoding 输出
+
+代码位置：
+
+- decoder 输出整理：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_train()` / `MapDetectorHead.forward_test()`
+- loss 和 matching：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.loss()`、`MapDetectorHead.get_targets()`、`MapDetectorHead._get_target_single()`
+- 推理后处理：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.post_process()`
+- 时序传播结果缓存：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.prepare_temporal_propagation()`
 
 `MapDetectorHead` 每个 decoder layer 输出：
 
@@ -606,6 +727,17 @@ results_list = [
 
 ## 10. 训练时序流程
 
+代码位置：
+
+- 主流程：`plugin/models/mapers/MapTracker.py`：`MapTracker.forward_train()`
+- 当前帧/历史帧 GT 预处理：`plugin/models/mapers/MapTracker.py`：`MapTracker.batch_data()`
+- BEV 生成：`plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.forward()`
+- Seg loss：`plugin/models/heads/MapSegHead.py`：`MapSegHead.forward_train()`
+- Vector loss：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_train()`、`MapDetectorHead.loss()`
+- 两帧 GT 匹配：`plugin/models/mapers/MapTracker.py`：`MapTracker.get_two_frame_matching()`
+- 下一帧 track query 构造：`plugin/models/mapers/MapTracker.py`：`MapTracker.prepare_track_queries_and_targets()`
+- vector memory 更新：`plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory.update_memory()`
+
 `forward_train()` 按时间帧展开：
 
 1. 当前帧和历史帧 GT 通过 `batch_data()` 整理成 `gts`。
@@ -628,6 +760,16 @@ loss, log_vars, num_sample
 ```
 
 ## 11. 推理时序流程
+
+代码位置：
+
+- 主流程：`plugin/models/mapers/MapTracker.py`：`MapTracker.forward_test()`
+- 历史 BEV 选择：`plugin/models/mapers/MapTracker.py`：`MapTracker.select_memory_entries()`
+- 上一帧 track query 读取：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.get_track_info()`
+- track query 传播：`plugin/models/mapers/MapTracker.py`：`MapTracker.temporal_propagate()`
+- vector head 推理：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.forward_test()`
+- 下一帧传播缓存：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.prepare_temporal_propagation()`
+- 结果后处理：`plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead.post_process()`
 
 `forward_test()` 当前只支持：
 
@@ -653,16 +795,16 @@ B = 1
 
 | README 模块 | 代码位置 | 输入 | 输出 |
 | --- | --- | --- | --- |
-| BEV Module | `BEVFormerBackbone` | `img`, `img_metas`, `history_bev_feats`, `all_history_coord` | `_bev_feats: Tensor[B, 256, 50, 100]` |
-| BEV Memory Buffer | `history_bev_feats`, `history_img_metas` | 历史 BEV feature + pose | warped history BEV |
-| Vehicle Motion | `process_history_info()` | 当前/历史 `ego2global` pose | `curr2prev`, `prev2curr`, `history_coord` |
-| BEV Memory Fusion | `BEVFormerBackbone.forward()` + `PerceptionTransformer` | 当前图像特征 + warped BEV memory | 当前 BEV feature |
-| Semantic Segmentation | `MapSegHead` | `bev_feats`, `semantic_mask` | `seg_preds`, `seg_loss`, `dice_loss` |
-| VEC Module | `MapDetectorHead` | `bev_feats`, `gts`, `track_query_info`, `memory_bank` | `lines`, `scores`, `hs_embeds`, losses |
-| PropMLP | `MotionMLP` | track query + relative pose | propagated query embedding |
-| Vector Memory Buffer | `VectorInstanceMemory` | 历史 query embeddings + pose | per-instance memory tensors |
-| Vector Memory Fusion | `MapTransformerLayer` 第二个 `cross_attn` | current track query + vector memory | fused query |
-| Vector Decoder | `MapTransformerDecoder_new` + cls/reg branches | fused query | polyline coordinates + class logits |
+| BEV Module | `plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone` | `img`, `img_metas`, `history_bev_feats`, `all_history_coord` | `_bev_feats: Tensor[B, 256, 50, 100]` |
+| BEV Memory Buffer | `plugin/models/mapers/MapTracker.py`：`history_bev_feats`、`history_img_metas` | 历史 BEV feature + pose | warped history BEV |
+| Vehicle Motion | `plugin/models/mapers/MapTracker.py`：`process_history_info()` | 当前/历史 `ego2global` pose | `curr2prev`, `prev2curr`, `history_coord` |
+| BEV Memory Fusion | `plugin/models/backbones/bevformer_backbone.py`：`BEVFormerBackbone.forward()` + `PerceptionTransformer` | 当前图像特征 + warped BEV memory | 当前 BEV feature |
+| Semantic Segmentation | `plugin/models/heads/MapSegHead.py`：`MapSegHead` | `bev_feats`, `semantic_mask` | `seg_preds`, `seg_loss`, `dice_loss` |
+| VEC Module | `plugin/models/heads/MapDetectorHead.py`：`MapDetectorHead` | `bev_feats`, `gts`, `track_query_info`, `memory_bank` | `lines`, `scores`, `hs_embeds`, losses |
+| PropMLP | `plugin/models/utils/query_update.py`：`MotionMLP` | track query + relative pose | propagated query embedding |
+| Vector Memory Buffer | `plugin/models/mapers/vector_memory.py`：`VectorInstanceMemory` | 历史 query embeddings + pose | per-instance memory tensors |
+| Vector Memory Fusion | `plugin/models/transformer_utils/MapTransformer.py`：`MapTransformerLayer.forward()` 第二个 `cross_attn` | current track query + vector memory | fused query |
+| Vector Decoder | `plugin/models/transformer_utils/MapTransformer.py`：`MapTransformerDecoder_new` + `plugin/models/heads/MapDetectorHead.py`：`cls_branches` / `reg_branches` | fused query | polyline coordinates + class logits |
 
 ## 13. 总结
 
