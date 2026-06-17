@@ -9,6 +9,31 @@ pc_range = [roi_range[0], roi_range[1], -3, roi_range[2], roi_range[3], 5]
 
 overfit_data_root = "/data/waymo_maptracker_x0_x45_y15_overfit6"
 
+img_norm_cfg = dict(
+    mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
+img_h = 608
+img_w = 608
+img_size = (img_h, img_w)
+
+cat2id = {
+    "ped_crossing": 0,
+    "divider": 1,
+    "boundary": 2,
+}
+
+coords_dim = 2
+num_points = 20
+permute = True
+canvas_size = (200, 100)
+thickness = 3
+meta = dict(
+    use_lidar=False,
+    use_camera=True,
+    use_radar=False,
+    use_map=False,
+    use_external=False,
+    output_format="vector")
+
 num_gpus = 1
 batch_size = 1
 num_iters_per_epoch = 100
