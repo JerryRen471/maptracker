@@ -68,7 +68,7 @@ class MapSegHead(nn.Module):
             m = self.conv_out
             nn.init.constant_(m.bias, bias_init)
     
-    def _prepare_visible_mask(self, visible_mask, preds):
+    def _prepare_visible_mask(self, visible_mask, preds, gts):
         if visible_mask is None:
             return None, None
 
@@ -86,9 +86,28 @@ class MapSegHead(nn.Module):
                 mode='nearest')
 
         visible_mask = (visible_mask > 0).to(dtype=preds.dtype, device=preds.device)
+        gt_mask = (gts.sum(dim=1, keepdim=True) > 0).to(dtype=preds.dtype)
+        visible_mask = torch.maximum(visible_mask, gt_mask)
         pixel_weight = visible_mask[:, 0]
         avg_factor = pixel_weight.sum().clamp_min(1.0)
         return visible_mask, (pixel_weight, avg_factor)
+
+    def _masked_dice_loss(self, preds, gts, visible_mask):
+        pred = (preds * visible_mask).sigmoid()
+        target = gts * visible_mask
+        pred = pred.flatten(2)
+        target = target.flatten(2)
+
+        intersection = torch.sum(pred * target, dim=2)
+        union = torch.sum(pred.pow(2), dim=2) + torch.sum(target, dim=2)
+        dice_coef = (2 * intersection + self.loss_dice.smooth) / (
+            union + self.loss_dice.smooth)
+
+        valid = target.sum(dim=2) > 0
+        if valid.any():
+            dice_loss = 1 - dice_coef[valid].mean()
+            return dice_loss * self.loss_dice.loss_weight
+        return preds.sum() * 0
 
     def forward_train(self, bev_features, gts, history_coords, visible_mask=None):
         x = self.relu(self.conv_in(bev_features))
@@ -96,7 +115,7 @@ class MapSegHead(nn.Module):
             x = conv_mid(x)
         preds = self.conv_out(x)
 
-        visible_mask, seg_weight = self._prepare_visible_mask(visible_mask, preds)
+        visible_mask, seg_weight = self._prepare_visible_mask(visible_mask, preds, gts)
         if visible_mask is None:
             seg_loss = self.loss_seg(preds, gts)
             dice_loss = self.loss_dice(preds, gts)
@@ -104,7 +123,7 @@ class MapSegHead(nn.Module):
             pixel_weight, avg_factor = seg_weight
             seg_loss = self.loss_seg(
                 preds, gts, weight=pixel_weight, avg_factor=avg_factor)
-            dice_loss = self.loss_dice(preds * visible_mask, gts * visible_mask)
+            dice_loss = self._masked_dice_loss(preds, gts, visible_mask)
         
         # downsample the features to the original bev size
         seg_feats = x
