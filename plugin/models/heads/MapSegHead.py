@@ -68,14 +68,43 @@ class MapSegHead(nn.Module):
             m = self.conv_out
             nn.init.constant_(m.bias, bias_init)
     
-    def forward_train(self, bev_features, gts, history_coords):
+    def _prepare_visible_mask(self, visible_mask, preds):
+        if visible_mask is None:
+            return None, None
+
+        if visible_mask.dim() == 3:
+            visible_mask = visible_mask[:, None]
+        elif visible_mask.dim() != 4:
+            raise ValueError(
+                'visible_mask must have shape [B, H, W] or [B, 1, H, W], '
+                f'got {tuple(visible_mask.shape)}')
+
+        if visible_mask.shape[-2:] != preds.shape[-2:]:
+            visible_mask = F.interpolate(
+                visible_mask.float(),
+                size=preds.shape[-2:],
+                mode='nearest')
+
+        visible_mask = (visible_mask > 0).to(dtype=preds.dtype, device=preds.device)
+        pixel_weight = visible_mask[:, 0]
+        avg_factor = pixel_weight.sum().clamp_min(1.0)
+        return visible_mask, (pixel_weight, avg_factor)
+
+    def forward_train(self, bev_features, gts, history_coords, visible_mask=None):
         x = self.relu(self.conv_in(bev_features))
         for conv_mid in self.conv_mid_layers:
             x = conv_mid(x)
         preds = self.conv_out(x)
 
-        seg_loss = self.loss_seg(preds, gts)
-        dice_loss = self.loss_dice(preds, gts)
+        visible_mask, seg_weight = self._prepare_visible_mask(visible_mask, preds)
+        if visible_mask is None:
+            seg_loss = self.loss_seg(preds, gts)
+            dice_loss = self.loss_dice(preds, gts)
+        else:
+            pixel_weight, avg_factor = seg_weight
+            seg_loss = self.loss_seg(
+                preds, gts, weight=pixel_weight, avg_factor=avg_factor)
+            dice_loss = self.loss_dice(preds * visible_mask, gts * visible_mask)
         
         # downsample the features to the original bev size
         seg_feats = x
