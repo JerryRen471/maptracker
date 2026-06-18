@@ -111,6 +111,47 @@ class MapTracker(BaseMapper):
         
         self.init_weights(pretrained)
 
+    def get_bev_visibility_mask(self, img_metas, device):
+        """Return BEV cells visible in at least one camera.
+
+        The mask is defined on the model BEV grid and uses ground-plane
+        points because the semantic map labels are rasterized on z=0.
+        """
+        masks = []
+        plane = self.plane.to(device=device, dtype=torch.float32)
+        eps = 1e-5
+
+        for img_meta in img_metas:
+            ego2img = torch.as_tensor(
+                np.asarray(img_meta['ego2img']),
+                dtype=torch.float32,
+                device=device)
+            proj = torch.einsum('nij,hwj->nhwi', ego2img, plane)
+            depth = proj[..., 2]
+            denom = torch.maximum(
+                depth,
+                torch.ones_like(depth) * eps)
+            u = proj[..., 0] / denom
+            v = proj[..., 1] / denom
+
+            img_shapes = img_meta['img_shape']
+            cam_masks = []
+            for cam_idx in range(ego2img.shape[0]):
+                shape = img_shapes[cam_idx] if isinstance(img_shapes, list) else img_shapes
+                img_h = float(shape[0])
+                img_w = float(shape[1])
+                cam_visible = (
+                    (depth[cam_idx] > eps)
+                    & (u[cam_idx] > 0.0)
+                    & (u[cam_idx] < img_w)
+                    & (v[cam_idx] > 0.0)
+                    & (v[cam_idx] < img_h)
+                )
+                cam_masks.append(cam_visible)
+            masks.append(torch.stack(cam_masks, dim=0).any(dim=0))
+
+        return torch.stack(masks, dim=0).to(dtype=torch.float32)
+
     def init_weights(self, pretrained=None):
         """Initialize model weights."""
         if pretrained:
@@ -455,8 +496,11 @@ class MapTracker(BaseMapper):
             local2global_next = all_local2global_info[t+1]
 
             # Compute the semantic segmentation loss
+            visible_mask_prev = self.get_bev_visibility_mask(
+                img_metas_prev, bev_feats.device)
             seg_preds, seg_feats, seg_loss, seg_dice_loss = self.seg_decoder(bev_feats, gts_semantic_prev,
-                    all_history_coord, return_loss=True)
+                    all_history_coord, visible_mask=visible_mask_prev,
+                    return_loss=True)
 
             # Save the history 
             history_bev_feats.append(bev_feats)
@@ -538,8 +582,9 @@ class MapTracker(BaseMapper):
             #import pdb; pdb.set_trace()
             ########################################################
 
+        visible_mask = self.get_bev_visibility_mask(img_metas, bev_feats.device)
         seg_preds, seg_feats, seg_loss, seg_dice_loss = self.seg_decoder(bev_feats, gt_semantic, 
-                all_history_coord, return_loss=True)
+                all_history_coord, visible_mask=visible_mask, return_loss=True)
         
         if not self.skip_vector_head:
             memory_bank = self.memory_bank if _use_memory else None
