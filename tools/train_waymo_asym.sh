@@ -7,6 +7,7 @@ CONDA_HOME="${CONDA_HOME:-/root/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-maptracker}"
 GPUS="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
 NUM_GPUS="${NUM_GPUS:-4}"
+EXP_TAG="${WAYMO_EXP_TAG:-asym_roi_mapseg_visible_iface}"
 
 usage() {
     cat <<'EOF'
@@ -46,16 +47,32 @@ stage_config() {
 stage_work_dir() {
     case "$1" in
         stage1)
-            echo "$WORK_ROOT/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_asym_roi"
+            echo "$WORK_ROOT/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_${EXP_TAG}"
             ;;
         stage2)
-            echo "$WORK_ROOT/maptracker_waymo_5cam_5frame_span10_stage2_warmup_asym_roi"
+            echo "$WORK_ROOT/maptracker_waymo_5cam_5frame_span10_stage2_warmup_${EXP_TAG}"
             ;;
         stage3)
-            echo "$WORK_ROOT/maptracker_waymo_5cam_5frame_span10_stage3_joint_finetune_asym_roi"
+            echo "$WORK_ROOT/maptracker_waymo_5cam_5frame_span10_stage3_joint_finetune_${EXP_TAG}"
             ;;
         *)
             echo "Unknown stage: $1" >&2
+            return 2
+            ;;
+    esac
+}
+
+stage_extra_args() {
+    case "$1" in
+        stage1)
+            ;;
+        stage2)
+            echo "--cfg-options load_from=$(stage_work_dir stage1)/latest.pth"
+            ;;
+        stage3)
+            echo "--cfg-options load_from=$(stage_work_dir stage2)/latest.pth"
+            ;;
+        *)
             return 2
             ;;
     esac
@@ -138,10 +155,14 @@ run_stage() {
     conda activate "$CONDA_ENV"
     set -u
     cd "$REPO_ROOT"
+    export PYTHONPATH="$REPO_ROOT:$REPO_ROOT/MapTR/mmdetection3d:${PYTHONPATH:-}"
     export CUDA_VISIBLE_DEVICES="$GPUS"
     export PORT="$port"
+    extra_args="$(stage_extra_args "$stage")"
     exec bash tools/dist_train.sh "$config" "$NUM_GPUS" \
-        --work-dir "$work_dir"
+        --work-dir "$work_dir" \
+        $extra_args
+
 }
 
 start_stage() {
@@ -155,9 +176,11 @@ start_stage() {
         echo "CONFIG=$config"
         echo "WORK_DIR=$work_dir"
         echo "CUDA_VISIBLE_DEVICES=$GPUS PORT=$port NUM_GPUS=$NUM_GPUS"
+        echo "EXTRA_ARGS=$(stage_extra_args "$stage")"
         echo "BACKGROUND_PID=0"
         return 0
     fi
+
 
     validate_predecessor "$stage"
     if stage_running "$stage"; then
