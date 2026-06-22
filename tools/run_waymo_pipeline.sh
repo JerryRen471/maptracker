@@ -27,6 +27,15 @@ FRAME_STRIDE="${FRAME_STRIDE:-5}"
 NUM_POINTS="${NUM_POINTS:-20}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 REUSE_IMAGES_FROM="${REUSE_IMAGES_FROM:-/data/waymo_processed_v3}"
+WAYMO_TRAIN_INFO=""
+WAYMO_VAL_INFO=""
+WAYMO_VAL_GT_TRACKS=""
+ROI_WIDTH=""
+ROI_HEIGHT=""
+ROI_RANGE_ARG=""
+ROI_SIZE_ARG=""
+PC_RANGE_ARG=""
+WAYMO_CFG_OPTIONS=()
 
 GPUS="${CUDA_VISIBLE_DEVICES:-0}"
 NUM_GPUS=""
@@ -102,6 +111,65 @@ die() {
 
 quote_cmd() {
     printf '%q ' "$@"
+}
+
+calc_diff() {
+    awk -v max="$1" -v min="$2" 'BEGIN { printf "%.12g", max - min }'
+}
+
+refresh_derived_config() {
+    WAYMO_TRAIN_INFO="$MAPTRACKER_DIR/waymo_map_infos_train.pkl"
+    WAYMO_VAL_INFO="$MAPTRACKER_DIR/waymo_map_infos_val.pkl"
+    WAYMO_VAL_GT_TRACKS="$MAPTRACKER_DIR/waymo_map_infos_val_gt_tracks.pkl"
+    ROI_WIDTH="$(calc_diff "$X_MAX" "$X_MIN")"
+    ROI_HEIGHT="$(calc_diff "$Y_MAX" "$Y_MIN")"
+    ROI_RANGE_ARG="[$X_MIN,$Y_MIN,$X_MAX,$Y_MAX]"
+    ROI_SIZE_ARG="[$ROI_WIDTH,$ROI_HEIGHT]"
+    PC_RANGE_ARG="[$X_MIN,$Y_MIN,-3,$X_MAX,$Y_MAX,5]"
+
+    WAYMO_CFG_OPTIONS=(
+        "roi_range=$ROI_RANGE_ARG"
+        "roi_size=$ROI_SIZE_ARG"
+        "pc_range=$PC_RANGE_ARG"
+        "model.roi_range=$ROI_RANGE_ARG"
+        "model.roi_size=$ROI_SIZE_ARG"
+        "model.backbone_cfg.roi_range=$ROI_RANGE_ARG"
+        "model.backbone_cfg.roi_size=$ROI_SIZE_ARG"
+        "model.backbone_cfg.transformer.encoder.pc_range=$PC_RANGE_ARG"
+        "model.head_cfg.roi_range=$ROI_RANGE_ARG"
+        "model.head_cfg.roi_size=$ROI_SIZE_ARG"
+        "eval_config.ann_file=$WAYMO_VAL_INFO"
+        "eval_config.roi_range=$ROI_RANGE_ARG"
+        "eval_config.roi_size=$ROI_SIZE_ARG"
+        "match_config.ann_file=$WAYMO_VAL_INFO"
+        "match_config.roi_range=$ROI_RANGE_ARG"
+        "match_config.roi_size=$ROI_SIZE_ARG"
+        "data.train.ann_file=$WAYMO_TRAIN_INFO"
+        "data.train.roi_range=$ROI_RANGE_ARG"
+        "data.train.roi_size=$ROI_SIZE_ARG"
+        "data.val.ann_file=$WAYMO_VAL_INFO"
+        "data.val.roi_range=$ROI_RANGE_ARG"
+        "data.val.roi_size=$ROI_SIZE_ARG"
+        "data.val.eval_config.ann_file=$WAYMO_VAL_INFO"
+        "data.val.eval_config.roi_range=$ROI_RANGE_ARG"
+        "data.val.eval_config.roi_size=$ROI_SIZE_ARG"
+        "data.test.ann_file=$WAYMO_VAL_INFO"
+        "data.test.roi_range=$ROI_RANGE_ARG"
+        "data.test.roi_size=$ROI_SIZE_ARG"
+        "data.test.eval_config.ann_file=$WAYMO_VAL_INFO"
+        "data.test.eval_config.roi_range=$ROI_RANGE_ARG"
+        "data.test.eval_config.roi_size=$ROI_SIZE_ARG"
+        "data.train.pipeline.0.roi_range=$ROI_RANGE_ARG"
+        "data.train.pipeline.0.roi_size=$ROI_SIZE_ARG"
+        "data.train.pipeline.1.roi_range=$ROI_RANGE_ARG"
+        "data.train.pipeline.1.roi_size=$ROI_SIZE_ARG"
+        "eval_config.pipeline.0.roi_range=$ROI_RANGE_ARG"
+        "eval_config.pipeline.0.roi_size=$ROI_SIZE_ARG"
+        "match_config.pipeline.0.roi_range=$ROI_RANGE_ARG"
+        "match_config.pipeline.0.roi_size=$ROI_SIZE_ARG"
+        "match_config.pipeline.1.roi_range=$ROI_RANGE_ARG"
+        "match_config.pipeline.1.roi_size=$ROI_SIZE_ARG"
+    )
 }
 
 run_shell() {
@@ -231,6 +299,8 @@ validate_args() {
     stage3_work="$(stage_work_dir "$STAGE3_CONFIG")"
     [[ -n "$TEST_WORK_DIR" ]] || TEST_WORK_DIR="$stage3_work/eval"
     [[ -n "$VIS_OUT_DIR" ]] || VIS_OUT_DIR="$stage3_work/visualization"
+
+    refresh_derived_config
 }
 
 print_summary() {
@@ -242,12 +312,18 @@ STAGE2_CONFIG=$STAGE2_CONFIG
 STAGE3_CONFIG=$STAGE3_CONFIG
 PROCESSED_DIR=$PROCESSED_DIR
 MAPTRACKER_DIR=$MAPTRACKER_DIR
+WAYMO_TRAIN_INFO=$WAYMO_TRAIN_INFO
+WAYMO_VAL_INFO=$WAYMO_VAL_INFO
 WORK_ROOT=$WORK_ROOT
 EXP_TAG=$EXP_TAG
 ROI=[$X_MIN,$Y_MIN,$X_MAX,$Y_MAX]
+ROI_SIZE=[$ROI_WIDTH,$ROI_HEIGHT]
+CFG_OPTION_ROI_RANGE=roi_range=$ROI_RANGE_ARG
+CFG_OPTION_ROI_SIZE=roi_size=$ROI_SIZE_ARG
+CFG_OPTION_PC_RANGE=pc_range=$PC_RANGE_ARG
 GPUS=$GPUS
 NUM_GPUS=$NUM_GPUS
-NOTE=Config ann_file paths are not rewritten; keep config data paths aligned with MAPTRACKER_DIR.
+NOTE=Config ann_file and ROI values are passed through --cfg-options from MAPTRACKER_DIR and ROI args.
 EOF
 }
 
@@ -283,7 +359,8 @@ prepare_gt_tracks() {
     [[ "$SKIP_GT_TRACKS" == "0" ]] || return 0
     local cmd
     cmd="$(quote_cmd python tools/tracking/prepare_gt_tracks.py "$STAGE1_CONFIG" \
-        --out-dir "$MAPTRACKER_DIR/track_visualization")"
+        --out-dir "$MAPTRACKER_DIR/track_visualization" \
+        --cfg-options "${WAYMO_CFG_OPTIONS[@]}")"
     if [[ "$VISUALIZE_GT_TRACKS" == "1" ]]; then
         cmd="$cmd --visualize"
     fi
@@ -297,10 +374,12 @@ train_stage() {
     local port="$4"
     local load_from="${5:-}"
     local cmd
+    local cfg_options=("${WAYMO_CFG_OPTIONS[@]}")
     cmd="CUDA_VISIBLE_DEVICES=$(printf '%q' "$GPUS") PORT=$(printf '%q' "$port") $(quote_cmd bash tools/dist_train.sh "$config" "$NUM_GPUS" --work-dir "$work_dir")"
     if [[ -n "$load_from" ]]; then
-        cmd="$cmd $(quote_cmd --cfg-options "load_from=$load_from")"
+        cfg_options+=("load_from=$load_from")
     fi
+    cmd="$cmd $(quote_cmd --cfg-options "${cfg_options[@]}")"
     echo "STAGE=$stage_name"
     echo "WORK_DIR=$work_dir"
     run_shell "$TRAIN_ENV" "$cmd"
@@ -322,7 +401,7 @@ run_test() {
     [[ "$SKIP_TEST" == "0" ]] || return 0
     local stage3_work cmd
     stage3_work="$(stage_work_dir "$STAGE3_CONFIG")"
-    cmd="CUDA_VISIBLE_DEVICES=$(printf '%q' "$GPUS") $(quote_cmd python tools/test.py "$STAGE3_CONFIG" "$stage3_work/latest.pth" --eval --work-dir "$TEST_WORK_DIR")"
+    cmd="CUDA_VISIBLE_DEVICES=$(printf '%q' "$GPUS") $(quote_cmd python tools/test.py "$STAGE3_CONFIG" "$stage3_work/latest.pth" --eval --work-dir "$TEST_WORK_DIR" --cfg-options "${WAYMO_CFG_OPTIONS[@]}")"
     run_shell "$TRAIN_ENV" "$cmd"
 }
 
@@ -330,7 +409,7 @@ visualize_results() {
     [[ "$SKIP_VIS" == "0" ]] || return 0
     local pred_path gt_path scene_args pred_cmd gt_cmd
     pred_path="$TEST_WORK_DIR/pos_predictions.pkl"
-    gt_path="$MAPTRACKER_DIR/waymo_map_infos_val_gt_tracks.pkl"
+    gt_path="$WAYMO_VAL_GT_TRACKS"
     scene_args=""
     if [[ "${#VIS_SCENE_ARGS[@]}" -gt 0 ]]; then
         scene_args="$(quote_cmd --scene_id "${VIS_SCENE_ARGS[@]}")"
@@ -341,13 +420,15 @@ visualize_results() {
         --out_dir "$VIS_OUT_DIR/pred" \
         --option vis-pred \
         --per_frame_result "$PER_FRAME_RESULT" \
-        --overwrite "$OVERWRITE") $scene_args"
+        --overwrite "$OVERWRITE" \
+        --cfg-options "${WAYMO_CFG_OPTIONS[@]}") $scene_args"
     gt_cmd="$(quote_cmd python tools/visualization/vis_global.py "$STAGE3_CONFIG" \
         --data_path "$gt_path" \
         --out_dir "$VIS_OUT_DIR/gt" \
         --option vis-gt \
         --per_frame_result "$PER_FRAME_RESULT" \
-        --overwrite "$OVERWRITE") $scene_args"
+        --overwrite "$OVERWRITE" \
+        --cfg-options "${WAYMO_CFG_OPTIONS[@]}") $scene_args"
 
     run_shell "$TRAIN_ENV" "$pred_cmd"
     run_shell "$TRAIN_ENV" "$gt_cmd"

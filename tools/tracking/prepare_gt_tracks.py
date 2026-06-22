@@ -1,6 +1,6 @@
 import argparse
 import mmcv
-from mmcv import Config
+from mmcv import Config, DictAction
 import os
 from mmdet3d.datasets import build_dataset, build_dataloader
 import cv2
@@ -41,6 +41,11 @@ def parse_args():
         action="store_true",
         default=False,
         help='whether visualize the formed gt tracks')
+    parser.add_argument(
+        '--cfg-options',
+        nargs='+',
+        action=DictAction,
+        help='override config settings in xxx=yyy format')
     args = parser.parse_args()
 
     return args
@@ -341,6 +346,8 @@ def form_gt_track_single(scene_name, scene_name2idx, dataset, out_dir, cfg, args
 def main():
     args = parse_args()
     cfg = Config.fromfile(args.config)
+    if args.cfg_options is not None:
+        cfg.merge_from_dict(args.cfg_options)
     import_plugin(cfg)
 
     for split in ['train', 'val']:

@@ -5,7 +5,7 @@ sys.path.append(os.path.dirname(SCRIPT_DIR))
 
 import argparse     
 import mmcv
-from mmcv import Config
+from mmcv import Config, DictAction
 import matplotlib.transforms as transforms
 from mmdet3d.datasets import build_dataset
 import cv2
@@ -85,6 +85,12 @@ def parse_args():
         default=False,
         action='store_true',
         help='Whether to use transparent background'
+    )
+    parser.add_argument(
+        '--cfg-options',
+        nargs='+',
+        action=DictAction,
+        help='override config settings in xxx=yyy format'
     )
     
     args = parser.parse_args()
@@ -1359,6 +1365,8 @@ def vis_gt_data(scene_name, args, dataset, gt_data, origin, roi_size):
 def main():
     args = parse_args()
     cfg = Config.fromfile(args.config)
+    if args.cfg_options is not None:
+        cfg.merge_from_dict(args.cfg_options)
     import_plugin(cfg)
     dataset = build_dataset(cfg.match_config)
 
