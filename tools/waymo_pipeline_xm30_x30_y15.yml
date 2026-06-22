@@ -4,20 +4,15 @@ paths:
   train_env: maptracker
   waymo_train_dir: /data8012/waymo/training
   waymo_val_dir: /data8012/waymo/validation
-  processed_dir: /data/waymo_processed_xm15_x45_y15
-  maptracker_dir: /data/waymo_maptracker_xm15_x45_y15
+  processed_dir: /data/waymo_processed_xm30_x30_y15
+  maptracker_dir: /data/waymo_maptracker_xm30_x30_y15
   work_root: /data/maptr_workspace/work_dirs
-  reuse_images_from: /data/waymo_processed_v3
-
-configs:
-  stage1: plugin/configs/maptracker/waymo_5cam/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain.py
-  stage2: null
-  stage3: null
+  reuse_images_from: ""
 
 roi:
-  x_min: -15
+  x_min: -30
   y_min: -15
-  x_max: 45
+  x_max: 30
   y_max: 15
 
 convert:
@@ -28,7 +23,7 @@ convert:
 runtime:
   gpus: "0,1,2,3"
   num_gpus: 4
-  exp_tag: asym_roi
+  exp_tag: xm30_x30_y15
   dry_run: false
 
 generated_configs:

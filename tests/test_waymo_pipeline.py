@@ -49,6 +49,11 @@ def write_config(tmpdir, **overrides):
             "exp_tag": "unit",
             "dry_run": True,
         },
+        "generated_configs": {
+            "enabled": True,
+            "out_dir": "",
+            "overwrite": True,
+        },
         "visualize": {
             "scene_ids": [],
             "per_frame_result": 1,
@@ -90,6 +95,10 @@ def write_config(tmpdir, **overrides):
               num_gpus: {base['runtime']['num_gpus']}
               exp_tag: {base['runtime']['exp_tag']}
               dry_run: {str(base['runtime']['dry_run']).lower()}
+            generated_configs:
+              enabled: {str(base['generated_configs']['enabled']).lower()}
+              out_dir: "{base['generated_configs']['out_dir']}"
+              overwrite: {str(base['generated_configs']['overwrite']).lower()}
             visualize:
               scene_ids: []
               per_frame_result: {base['visualize']['per_frame_result']}
@@ -167,7 +176,7 @@ class WaymoPipelineTest(unittest.TestCase):
     def test_dry_run_generates_stage_commands_with_consistent_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = pathlib.Path(tmp)
-            cfg = write_config(tmpdir)
+            cfg = write_config(tmpdir, generated_configs={"enabled": False})
             (tmpdir / "maptracker").mkdir()
             (tmpdir / "maptracker" / "waymo_map_infos_train.pkl").write_bytes(b"")
             (tmpdir / "maptracker" / "waymo_map_infos_val.pkl").write_bytes(b"")
@@ -245,6 +254,90 @@ class WaymoPipelineTest(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["status"], "ready")
             self.assertEqual(payload["missing"], [])
+            self.assertEqual(payload["requested_steps"][0], "generate_configs")
+
+    def test_train_stage_uses_generated_config_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            generated_dir = tmpdir / "generated"
+            cfg = write_config(tmpdir, generated_configs={"out_dir": str(generated_dir)})
+            (tmpdir / "maptracker").mkdir()
+            (tmpdir / "maptracker" / "waymo_map_infos_train.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_train_gt_tracks.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val_gt_tracks.pkl").write_bytes(b"")
+            stage1_work = (
+                tmpdir
+                / "work_dirs"
+                / "maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_unit"
+            )
+            stage1_work.mkdir(parents=True)
+            (stage1_work / "latest.pth").write_bytes(b"")
+
+            result = subprocess.run(
+                [
+                    "python",
+                    str(SCRIPT),
+                    "--config",
+                    str(cfg),
+                    "--steps",
+                    "generate_configs,train_stage2",
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "ready")
+            self.assertEqual(payload["commands"][0]["step"], "generate_configs")
+            train_command = payload["commands"][1]["command"]
+            self.assertIn(str(generated_dir), train_command)
+            self.assertIn(
+                "maptracker_waymo_5cam_5frame_span10_stage2_warmup_unit.py",
+                train_command,
+            )
+            self.assertNotIn(" --cfg-options ", train_command)
+
+    def test_train_stage_reports_missing_generated_config_without_generation_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            generated_dir = tmpdir / "generated"
+            cfg = write_config(tmpdir, generated_configs={"out_dir": str(generated_dir)})
+            (tmpdir / "maptracker").mkdir()
+            (tmpdir / "maptracker" / "waymo_map_infos_train.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_train_gt_tracks.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val_gt_tracks.pkl").write_bytes(b"")
+
+            result = subprocess.run(
+                [
+                    "python",
+                    str(SCRIPT),
+                    "--config",
+                    str(cfg),
+                    "--steps",
+                    "train_stage1",
+                    "--check-only",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            payload = json.loads(result.stdout)
+            missing_paths = {item["path"] for item in payload["missing"]}
+            self.assertIn(
+                str(generated_dir / "maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_unit.py"),
+                missing_paths,
+            )
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = REPO_ROOT.parent
 
 PIPELINE_ORDER = [
+    "generate_configs",
     "convert",
     "pack",
     "gt_tracks",
@@ -33,6 +34,8 @@ PIPELINE_ORDER = [
 STEP_ALIASES = {
     "all": PIPELINE_ORDER,
     "full": PIPELINE_ORDER,
+    "generate_configs": ["generate_configs"],
+    "configs": ["generate_configs"],
     "train": ["train_stage1", "train_stage2", "train_stage3"],
     "train_stage": ["train_stage1", "train_stage2", "train_stage3"],
     "pack": ["pack"],
@@ -69,9 +72,11 @@ class CommandSpec:
 
 @dataclass
 class PipelineConfig:
+    config_file: Path | None
     raw: dict[str, Any]
     paths: dict[str, Any]
     configs: dict[str, Any]
+    generated_configs: dict[str, Any]
     roi: dict[str, Any]
     convert: dict[str, Any]
     runtime: dict[str, Any]
@@ -94,6 +99,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--check-only", action="store_true", help="Only check prerequisites")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    parser.add_argument(
+        "--materialize-configs",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
 
 
@@ -139,7 +149,7 @@ def infer_stage_config(stage1: str, target: str) -> str:
     raise ValueError(f"invalid target stage: {target}")
 
 
-def build_config(raw: dict[str, Any]) -> PipelineConfig:
+def build_config(raw: dict[str, Any], config_file: Path | None = None) -> PipelineConfig:
     paths = {
         "conda_home": "/root/miniconda3",
         "waymo_env": "waymo_pack",
@@ -178,10 +188,19 @@ def build_config(raw: dict[str, Any]) -> PipelineConfig:
     stage2_config = config_path(stage2_value)
     stage3_config = config_path(stage3_value)
 
+    generated_configs = {
+        "enabled": True,
+        "out_dir": None,
+        "overwrite": True,
+    }
+    generated_configs.update(section(raw, "generated_configs"))
+
     cfg = PipelineConfig(
+        config_file=config_file,
         raw=raw,
         paths=paths,
         configs=configs,
+        generated_configs=generated_configs,
         roi=roi,
         convert=convert,
         runtime=runtime,
@@ -207,6 +226,10 @@ def derive_values(cfg: PipelineConfig) -> dict[str, Any]:
     stage1_work = stage_work_dir(cfg, cfg.stage1_config)
     stage2_work = stage_work_dir(cfg, cfg.stage2_config)
     stage3_work = stage_work_dir(cfg, cfg.stage3_config)
+    generated_out_dir = generated_config_dir(cfg)
+    generated_stage1 = generated_out_dir / f"{cfg.stage1_config.stem}_{cfg.runtime['exp_tag']}.py"
+    generated_stage2 = generated_out_dir / f"{cfg.stage2_config.stem}_{cfg.runtime['exp_tag']}.py"
+    generated_stage3 = generated_out_dir / f"{cfg.stage3_config.stem}_{cfg.runtime['exp_tag']}.py"
 
     return {
         "roi_range": f"[{x_min},{y_min},{x_max},{y_max}]",
@@ -224,6 +247,10 @@ def derive_values(cfg: PipelineConfig) -> dict[str, Any]:
         "stage1_checkpoint": stage1_work / "latest.pth",
         "stage2_checkpoint": stage2_work / "latest.pth",
         "stage3_checkpoint": stage3_work / "latest.pth",
+        "generated_config_dir": generated_out_dir,
+        "generated_stage1_config": generated_stage1,
+        "generated_stage2_config": generated_stage2,
+        "generated_stage3_config": generated_stage3,
         "test_work_dir": Path(str(cfg.runtime.get("test_work_dir") or (stage3_work / "eval"))),
         "vis_out_dir": Path(str(cfg.visualize.get("out_dir") or (stage3_work / "visualization"))),
     }
@@ -232,6 +259,27 @@ def derive_values(cfg: PipelineConfig) -> dict[str, Any]:
 def stage_work_dir(cfg: PipelineConfig, config: Path) -> Path:
     base = config.stem
     return Path(str(cfg.paths["work_root"])) / f"{base}_{cfg.runtime['exp_tag']}"
+
+
+def generated_config_dir(cfg: PipelineConfig) -> Path:
+    out_dir = cfg.generated_configs.get("out_dir")
+    if out_dir:
+        return Path(str(out_dir))
+    return Path(str(cfg.paths["work_root"])) / "generated_configs" / str(cfg.runtime["exp_tag"])
+
+
+def generated_configs_enabled(cfg: PipelineConfig) -> bool:
+    return bool(cfg.generated_configs.get("enabled", True))
+
+
+def active_stage_config(cfg: PipelineConfig, stage_num: str) -> Path:
+    if not generated_configs_enabled(cfg):
+        return {"1": cfg.stage1_config, "2": cfg.stage2_config, "3": cfg.stage3_config}[stage_num]
+    return {
+        "1": cfg.derived["generated_stage1_config"],
+        "2": cfg.derived["generated_stage2_config"],
+        "3": cfg.derived["generated_stage3_config"],
+    }[stage_num]
 
 
 def expand_steps(value: str) -> list[str]:
@@ -255,6 +303,11 @@ def path_has_tfrecords(path: Path) -> bool:
 def produced_paths(cfg: PipelineConfig, step: str) -> list[Path]:
     d = cfg.derived
     return {
+        "generate_configs": (
+            [d["generated_stage1_config"], d["generated_stage2_config"], d["generated_stage3_config"]]
+            if generated_configs_enabled(cfg)
+            else []
+        ),
         "convert": [d["processed_train"], d["processed_val"]],
         "pack": [d["maptracker_train"], d["maptracker_val"]],
         "gt_tracks": [d["maptracker_train_tracks"], d["maptracker_val_tracks"]],
@@ -269,6 +322,11 @@ def produced_paths(cfg: PipelineConfig, step: str) -> list[Path]:
 def required_paths(cfg: PipelineConfig, step: str) -> list[tuple[str, Path, str]]:
     d = cfg.derived
     requirements: dict[str, list[tuple[str, Path, str]]] = {
+        "generate_configs": [
+            ("file", cfg.stage1_config, "generate_configs requires base stage1 config"),
+            ("file", cfg.stage2_config, "generate_configs requires base stage2 config"),
+            ("file", cfg.stage3_config, "generate_configs requires base stage3 config"),
+        ],
         "pack": [
             ("file", d["processed_train"], "pack requires converted train_infos.pkl"),
             ("file", d["processed_val"], "pack requires converted val_infos.pkl"),
@@ -276,14 +334,14 @@ def required_paths(cfg: PipelineConfig, step: str) -> list[tuple[str, Path, str]
         "gt_tracks": [
             ("file", d["maptracker_train"], "gt_tracks requires packed train pkl"),
             ("file", d["maptracker_val"], "gt_tracks requires packed val pkl"),
-            ("file", cfg.stage1_config, "gt_tracks requires stage1 config"),
+            ("file", active_stage_config(cfg, "1"), "gt_tracks requires stage1 config"),
         ],
         "train_stage1": [
             ("file", d["maptracker_train"], "stage1 requires packed train pkl"),
             ("file", d["maptracker_val"], "stage1 requires packed val pkl"),
             ("file", d["maptracker_train_tracks"], "stage1 requires train GT tracks"),
             ("file", d["maptracker_val_tracks"], "stage1 requires val GT tracks"),
-            ("file", cfg.stage1_config, "stage1 requires stage1 config"),
+            ("file", active_stage_config(cfg, "1"), "stage1 requires stage1 config"),
         ],
         "train_stage2": [
             ("file", d["stage1_checkpoint"], "stage2 requires stage1 checkpoint"),
@@ -291,7 +349,7 @@ def required_paths(cfg: PipelineConfig, step: str) -> list[tuple[str, Path, str]
             ("file", d["maptracker_val"], "stage2 requires packed val pkl"),
             ("file", d["maptracker_train_tracks"], "stage2 requires train GT tracks"),
             ("file", d["maptracker_val_tracks"], "stage2 requires val GT tracks"),
-            ("file", cfg.stage2_config, "stage2 requires stage2 config"),
+            ("file", active_stage_config(cfg, "2"), "stage2 requires stage2 config"),
         ],
         "train_stage3": [
             ("file", d["stage2_checkpoint"], "stage3 requires stage2 checkpoint"),
@@ -299,17 +357,17 @@ def required_paths(cfg: PipelineConfig, step: str) -> list[tuple[str, Path, str]
             ("file", d["maptracker_val"], "stage3 requires packed val pkl"),
             ("file", d["maptracker_train_tracks"], "stage3 requires train GT tracks"),
             ("file", d["maptracker_val_tracks"], "stage3 requires val GT tracks"),
-            ("file", cfg.stage3_config, "stage3 requires stage3 config"),
+            ("file", active_stage_config(cfg, "3"), "stage3 requires stage3 config"),
         ],
         "test": [
             ("file", d["stage3_checkpoint"], "test requires stage3 checkpoint"),
             ("file", d["maptracker_val"], "test requires packed val pkl"),
-            ("file", cfg.stage3_config, "test requires stage3 config"),
+            ("file", active_stage_config(cfg, "3"), "test requires stage3 config"),
         ],
         "visualize": [
             ("file", d["test_work_dir"] / "pos_predictions.pkl", "visualize requires predictions"),
             ("file", d["maptracker_val_tracks"], "visualize requires val GT tracks"),
-            ("file", cfg.stage3_config, "visualize requires stage3 config"),
+            ("file", active_stage_config(cfg, "3"), "visualize requires stage3 config"),
         ],
     }
     return requirements.get(step, [])
@@ -422,6 +480,95 @@ def cfg_options(cfg: PipelineConfig) -> list[str]:
     ]
 
 
+def cfg_override_dict(cfg: PipelineConfig, stage_num: str) -> dict[str, Any]:
+    d = cfg.derived
+    roi_range = [cfg.roi["x_min"], cfg.roi["y_min"], cfg.roi["x_max"], cfg.roi["y_max"]]
+    roi_size = [cfg.roi["x_max"] - cfg.roi["x_min"], cfg.roi["y_max"] - cfg.roi["y_min"]]
+    pc_range = [cfg.roi["x_min"], cfg.roi["y_min"], -3, cfg.roi["x_max"], cfg.roi["y_max"], 5]
+    train = str(d["maptracker_train"])
+    val = str(d["maptracker_val"])
+    overrides: dict[str, Any] = {
+        "roi_range": tuple(roi_range),
+        "roi_size": tuple(roi_size),
+        "pc_range": pc_range,
+        "model.roi_range": tuple(roi_range),
+        "model.roi_size": tuple(roi_size),
+        "model.backbone_cfg.roi_range": tuple(roi_range),
+        "model.backbone_cfg.roi_size": tuple(roi_size),
+        "model.backbone_cfg.transformer.encoder.pc_range": pc_range,
+        "model.head_cfg.roi_range": tuple(roi_range),
+        "model.head_cfg.roi_size": tuple(roi_size),
+        "eval_config.ann_file": val,
+        "eval_config.roi_range": tuple(roi_range),
+        "eval_config.roi_size": tuple(roi_size),
+        "match_config.ann_file": val,
+        "match_config.roi_range": tuple(roi_range),
+        "match_config.roi_size": tuple(roi_size),
+        "data.train.ann_file": train,
+        "data.train.roi_range": tuple(roi_range),
+        "data.train.roi_size": tuple(roi_size),
+        "data.val.ann_file": val,
+        "data.val.roi_range": tuple(roi_range),
+        "data.val.roi_size": tuple(roi_size),
+        "data.val.eval_config.ann_file": val,
+        "data.val.eval_config.roi_range": tuple(roi_range),
+        "data.val.eval_config.roi_size": tuple(roi_size),
+        "data.test.ann_file": val,
+        "data.test.roi_range": tuple(roi_range),
+        "data.test.roi_size": tuple(roi_size),
+        "data.test.eval_config.ann_file": val,
+        "data.test.eval_config.roi_range": tuple(roi_range),
+        "data.test.eval_config.roi_size": tuple(roi_size),
+        "data.train.pipeline.0.roi_range": tuple(roi_range),
+        "data.train.pipeline.0.roi_size": tuple(roi_size),
+        "data.train.pipeline.1.roi_range": tuple(roi_range),
+        "data.train.pipeline.1.roi_size": tuple(roi_size),
+        "eval_config.pipeline.0.roi_range": tuple(roi_range),
+        "eval_config.pipeline.0.roi_size": tuple(roi_size),
+        "match_config.pipeline.0.roi_range": tuple(roi_range),
+        "match_config.pipeline.0.roi_size": tuple(roi_size),
+        "match_config.pipeline.1.roi_range": tuple(roi_range),
+        "match_config.pipeline.1.roi_size": tuple(roi_size),
+    }
+    if stage_num == "2":
+        overrides["load_from"] = str(d["stage1_checkpoint"])
+    elif stage_num == "3":
+        overrides["load_from"] = str(d["stage2_checkpoint"])
+    return overrides
+
+
+def materialize_configs(cfg: PipelineConfig) -> list[Path]:
+    if not generated_configs_enabled(cfg):
+        return []
+
+    from mmcv import Config
+
+    output_paths = {
+        "1": cfg.derived["generated_stage1_config"],
+        "2": cfg.derived["generated_stage2_config"],
+        "3": cfg.derived["generated_stage3_config"],
+    }
+    base_paths = {
+        "1": cfg.stage1_config,
+        "2": cfg.stage2_config,
+        "3": cfg.stage3_config,
+    }
+    overwrite = bool(cfg.generated_configs.get("overwrite", True))
+
+    generated = []
+    for stage_num in ["1", "2", "3"]:
+        out_path = output_paths[stage_num]
+        if out_path.exists() and not overwrite:
+            generated.append(out_path)
+            continue
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        stage_cfg = Config.fromfile(str(base_paths[stage_num]))
+        stage_cfg.merge_from_dict(cfg_override_dict(cfg, stage_num))
+        stage_cfg.dump(str(out_path))
+        generated.append(out_path)
+    return generated
+
+
 def shell_join(parts: list[str]) -> str:
     return " ".join(shell_quote(part) for part in parts)
 
@@ -458,7 +605,26 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
     gpus = str(cfg.runtime["gpus"])
 
     for step in steps:
-        if step == "convert":
+        if step == "generate_configs":
+            if not generated_configs_enabled(cfg):
+                continue
+            if cfg.config_file is None:
+                raise ValueError("generate_configs requires --config to be a real file path")
+            args = [
+                "python",
+                "tools/waymo_pipeline.py",
+                "--config",
+                cfg.config_file,
+                "--materialize-configs",
+            ]
+            specs.append(
+                CommandSpec(
+                    step,
+                    command_with_env(cfg, cfg.paths["train_env"], shell_join(args)),
+                    cfg.paths["train_env"],
+                )
+            )
+        elif step == "convert":
             args = [
                 "python",
                 "tools/data_converter/waymo_map_converter.py",
@@ -497,19 +663,20 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
             ]
             specs.append(CommandSpec(step, command_with_env(cfg, cfg.paths["train_env"], shell_join(args)), cfg.paths["train_env"]))
         elif step == "gt_tracks":
+            stage1_config = active_stage_config(cfg, "1")
             args = [
                 "python",
                 "tools/tracking/prepare_gt_tracks.py",
-                rel_config(cfg.stage1_config),
+                rel_config(stage1_config),
                 "--out-dir",
                 Path(str(cfg.paths["maptracker_dir"])) / "track_visualization",
-                "--cfg-options",
-                *options,
             ]
+            if not generated_configs_enabled(cfg):
+                args.extend(["--cfg-options", *options])
             specs.append(CommandSpec(step, command_with_env(cfg, cfg.paths["train_env"], shell_join(args)), cfg.paths["train_env"]))
         elif step.startswith("train_stage"):
             stage_num = step[-1]
-            config = {"1": cfg.stage1_config, "2": cfg.stage2_config, "3": cfg.stage3_config}[stage_num]
+            config = active_stage_config(cfg, stage_num)
             work_dir = {"1": d["stage1_work"], "2": d["stage2_work"], "3": d["stage3_work"]}[stage_num]
             port = {"1": "29511", "2": "29513", "3": "29514"}[stage_num]
             stage_options = list(options)
@@ -524,23 +691,23 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 num_gpus,
                 "--work-dir",
                 work_dir,
-                "--cfg-options",
-                *stage_options,
             ]
+            if not generated_configs_enabled(cfg):
+                args.extend(["--cfg-options", *stage_options])
             body = f"CUDA_VISIBLE_DEVICES={shlex.quote(gpus)} PORT={port} {shell_join(args)}"
             specs.append(CommandSpec(step, command_with_env(cfg, cfg.paths["train_env"], body), cfg.paths["train_env"]))
         elif step == "test":
             args = [
                 "python",
                 "tools/test.py",
-                rel_config(cfg.stage3_config),
+                rel_config(active_stage_config(cfg, "3")),
                 d["stage3_checkpoint"],
                 "--eval",
                 "--work-dir",
                 d["test_work_dir"],
-                "--cfg-options",
-                *options,
             ]
+            if not generated_configs_enabled(cfg):
+                args.extend(["--cfg-options", *options])
             body = f"CUDA_VISIBLE_DEVICES={shlex.quote(gpus)} {shell_join(args)}"
             specs.append(CommandSpec(step, command_with_env(cfg, cfg.paths["train_env"], body), cfg.paths["train_env"]))
         elif step == "visualize":
@@ -550,7 +717,7 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
             pred_args = [
                 "python",
                 "tools/visualization/vis_global.py",
-                rel_config(cfg.stage3_config),
+                rel_config(active_stage_config(cfg, "3")),
                 "--data_path",
                 d["test_work_dir"] / "pos_predictions.pkl",
                 "--out_dir",
@@ -561,14 +728,14 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 cfg.visualize["per_frame_result"],
                 "--overwrite",
                 cfg.visualize["overwrite"],
-                "--cfg-options",
-                *options,
                 *scene_args,
             ]
+            if not generated_configs_enabled(cfg):
+                pred_args.extend(["--cfg-options", *options])
             gt_args = [
                 "python",
                 "tools/visualization/vis_global.py",
-                rel_config(cfg.stage3_config),
+                rel_config(active_stage_config(cfg, "3")),
                 "--data_path",
                 d["maptracker_val_tracks"],
                 "--out_dir",
@@ -579,10 +746,10 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 cfg.visualize["per_frame_result"],
                 "--overwrite",
                 cfg.visualize["overwrite"],
-                "--cfg-options",
-                *options,
                 *scene_args,
             ]
+            if not generated_configs_enabled(cfg):
+                gt_args.extend(["--cfg-options", *options])
             specs.append(CommandSpec("visualize_pred", command_with_env(cfg, cfg.paths["train_env"], shell_join(pred_args)), cfg.paths["train_env"]))
             specs.append(CommandSpec("visualize_gt", command_with_env(cfg, cfg.paths["train_env"], shell_join(gt_args)), cfg.paths["train_env"]))
     return specs
@@ -622,7 +789,23 @@ def run_commands(commands: list[CommandSpec]) -> int:
 def main() -> int:
     args = parse_args()
     try:
-        cfg = build_config(load_config(Path(args.config)))
+        config_file = Path(args.config).resolve()
+        cfg = build_config(load_config(config_file), config_file=config_file)
+        if args.materialize_configs:
+            generated = materialize_configs(cfg)
+            payload = {
+                "status": "generated",
+                "requested_steps": ["generate_configs"],
+                "missing": [],
+                "commands": [],
+                "generated_configs": [str(path) for path in generated],
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2, ensure_ascii=False))
+            else:
+                for path in generated:
+                    print(path)
+            return 0
         steps = expand_steps(args.steps)
     except Exception as exc:
         payload = {"status": "error", "requested_steps": [], "missing": [], "commands": [], "error": str(exc)}
