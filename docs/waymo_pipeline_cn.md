@@ -1,6 +1,6 @@
 # Waymo 三阶段训练流水线脚本使用说明
 
-本文说明如何使用 `tools/run_waymo_pipeline.sh` 自动运行 Waymo 数据转化、MapTracker 数据打包、GT track 生成、Stage1/Stage2/Stage3 训练、评测和可视化。
+本文说明如何使用 Waymo 流水线脚本自动运行数据转化、MapTracker 数据打包、可选 subset、GT track 生成、Stage1/Stage2/Stage3 训练、评测和可视化。
 
 ## 1. 脚本位置
 
@@ -10,13 +10,95 @@
 cd /home/saimo/jerry/codex_workplace/maptr/maptracker
 ```
 
-脚本路径：
+推荐的配置驱动入口：
+
+```bash
+tools/waymo_pipeline.py
+```
+
+旧版 shell 入口仍可使用：
 
 ```bash
 tools/run_waymo_pipeline.sh
 ```
 
-## 2. 最小运行命令
+## 2. 配置驱动入口
+
+推荐使用 `tools/waymo_pipeline.py`，它接受一个 YAML/JSON 配置文件和需要执行的步骤，先检查前置条件，再执行命令。
+
+```bash
+python tools/waymo_pipeline.py \
+  --config tools/waymo_pipeline_xm30_x30_y15.yml \
+  --steps all \
+  --check-only
+```
+
+只打印命令，不实际执行：
+
+```bash
+python tools/waymo_pipeline.py \
+  --config tools/waymo_pipeline_xm30_x30_y15.yml \
+  --steps all \
+  --dry-run
+```
+
+可选步骤：
+
+```text
+convert, pack, subset, generate_configs, gt_tracks,
+train_stage1, train_stage2, train_stage3, test, visualize
+```
+
+常用别名：
+
+```text
+all/full     完整流程
+train        train_stage1,train_stage2,train_stage3
+stage1/2/3   单独训练某个阶段
+configs      generate_configs
+pack_subset  subset
+vis          visualize
+```
+
+`subset` 阶段由配置中的 `subset.enabled` 控制。启用后，完整流程会变成：
+
+```text
+convert -> pack -> subset -> generate_configs -> gt_tracks -> train_stage1 -> train_stage2 -> train_stage3 -> test -> visualize
+```
+
+其中 `pack` 写入完整 `paths.maptracker_dir`，`subset` 从该目录读取完整 pkl，再写入 `subset.output_dir`。只要 `subset.enabled: true`，后续生成的三阶段配置、GT tracks、训练、评测和可视化都会统一使用 `subset.output_dir` 下的 pkl。
+
+示例配置：
+
+```yaml
+subset:
+  enabled: true
+  output_dir: /data/waymo_maptracker_xm30_x30_y15_overfit6
+  num_scenes: 6
+  scenes: []
+```
+
+只生成 subset：
+
+```bash
+python tools/waymo_pipeline.py \
+  --config tools/waymo_pipeline_xm30_x30_y15.yml \
+  --steps subset
+```
+
+如果只想指定某几个 scene：
+
+```yaml
+subset:
+  enabled: true
+  output_dir: /data/waymo_maptracker_xm30_x30_y15_debug
+  num_scenes: 2
+  scenes:
+    - segment-xxx
+    - segment-yyy
+```
+
+## 3. 旧版 shell 脚本最小运行命令
 
 ```bash
 bash tools/run_waymo_pipeline.sh \
@@ -39,7 +121,7 @@ plugin/configs/maptracker/waymo_5cam/maptracker_waymo_5cam_5frame_span10_stage2_
 plugin/configs/maptracker/waymo_5cam/maptracker_waymo_5cam_5frame_span10_stage3_joint_finetune.py
 ```
 
-## 3. 推荐先 dry-run
+## 4. 推荐先 dry-run
 
 第一次使用时建议先打印命令，不实际执行：
 
@@ -67,7 +149,7 @@ NUM_GPUS
 
 脚本不会自动改写 config 里的 `ann_file`。如果你修改了 `--maptracker-dir`，需要确认 config 中的数据路径也指向同一份 MapTracker pkl。
 
-## 4. 默认数据路径和环境
+## 5. 默认数据路径和环境
 
 脚本默认值如下：
 
@@ -89,7 +171,7 @@ ROI:                  x=[-15,45], y=[-15,15]
 x_min=-15, y_min=-15, x_max=45, y_max=15
 ```
 
-## 5. 完整流程
+## 6. 旧版 shell 完整流程
 
 脚本按顺序执行以下步骤：
 
@@ -119,7 +201,7 @@ x_min=-15, y_min=-15, x_max=45, y_max=15
 
 Stage2 会加载 Stage1 的 `latest.pth`，Stage3 会加载 Stage2 的 `latest.pth`。
 
-## 6. 输出目录
+## 7. 输出目录
 
 假设 `--exp-tag asym_roi`，默认 work_dir 为：
 
@@ -147,7 +229,7 @@ GT 可视化默认输出到：
 <stage3_work_dir>/visualization/gt
 ```
 
-## 7. 常用参数
+## 8. 旧版 shell 常用参数
 
 改 GPU：
 
@@ -201,7 +283,7 @@ GT 可视化默认输出到：
 --scene-id segment-yyy
 ```
 
-## 8. 跳过部分步骤
+## 9. 旧版 shell 跳过部分步骤
 
 如果数据已经转好，只重新训练：
 
@@ -239,7 +321,7 @@ bash tools/run_waymo_pipeline.sh \
 --skip-train --skip-test --skip-vis
 ```
 
-## 9. 环境变量覆盖
+## 10. 环境变量覆盖
 
 部分默认值也可以通过环境变量覆盖：
 
@@ -256,7 +338,7 @@ bash tools/run_waymo_pipeline.sh \
 
 如果同时设置了 `CUDA_VISIBLE_DEVICES` 和 `--gpus`，以 `--gpus` 为准。
 
-## 10. 注意事项
+## 11. 注意事项
 
 1. `waymo_map_converter.py` 需要 TensorFlow 和 Waymo Open Dataset SDK，所以默认在 `waymo_pack` 环境中运行。
 2. 打包、GT track、训练、评测、可视化默认在 `maptracker` 环境中运行。
@@ -266,4 +348,3 @@ bash tools/run_waymo_pipeline.sh \
 6. 可视化预测结果默认读取 `<stage3_work_dir>/eval/pos_predictions.pkl`。
 7. 可视化 GT 默认读取 `<maptracker_dir>/waymo_map_infos_val_gt_tracks.pkl`。
 8. 脚本不会检查 pkl 中的 ROI metadata 是否和 config 完全一致，运行前需要人工确认数据目录和 config 对应。
-

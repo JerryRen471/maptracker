@@ -31,6 +31,12 @@ generated_configs:
   out_dir: null
   overwrite: true
 
+subset:
+  enabled: true
+  output_dir: /data/waymo_maptracker_xm30_x30_y15_overfit6
+  num_scenes: 6
+  scenes: []
+
 visualize:
   scene_ids: []
   per_frame_result: 1

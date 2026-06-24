@@ -20,9 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = REPO_ROOT.parent
 
 PIPELINE_ORDER = [
-    "generate_configs",
     "convert",
     "pack",
+    "subset",
+    "generate_configs",
     "gt_tracks",
     "train_stage1",
     "train_stage2",
@@ -39,6 +40,8 @@ STEP_ALIASES = {
     "train": ["train_stage1", "train_stage2", "train_stage3"],
     "train_stage": ["train_stage1", "train_stage2", "train_stage3"],
     "pack": ["pack"],
+    "subset": ["subset"],
+    "pack_subset": ["subset"],
     "convert": ["convert"],
     "gt": ["gt_tracks"],
     "gt_tracks": ["gt_tracks"],
@@ -77,6 +80,7 @@ class PipelineConfig:
     paths: dict[str, Any]
     configs: dict[str, Any]
     generated_configs: dict[str, Any]
+    subset: dict[str, Any]
     roi: dict[str, Any]
     convert: dict[str, Any]
     runtime: dict[str, Any]
@@ -93,7 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--steps",
         default="all",
-        help="Comma-separated steps or aliases: all, convert, pack, gt_tracks, train, "
+        help="Comma-separated steps or aliases: all, convert, pack, subset, gt_tracks, train, "
         "train_stage1, train_stage2, train_stage3, test, visualize",
     )
     parser.add_argument("--check-only", action="store_true", help="Only check prerequisites")
@@ -195,12 +199,21 @@ def build_config(raw: dict[str, Any], config_file: Path | None = None) -> Pipeli
     }
     generated_configs.update(section(raw, "generated_configs"))
 
+    subset = {
+        "enabled": False,
+        "output_dir": None,
+        "num_scenes": 6,
+        "scenes": [],
+    }
+    subset.update(section(raw, "subset"))
+
     cfg = PipelineConfig(
         config_file=config_file,
         raw=raw,
         paths=paths,
         configs=configs,
         generated_configs=generated_configs,
+        subset=subset,
         roi=roi,
         convert=convert,
         runtime=runtime,
@@ -220,7 +233,14 @@ def derive_values(cfg: PipelineConfig) -> dict[str, Any]:
     y_max = cfg.roi["y_max"]
     roi_width = x_max - x_min
     roi_height = y_max - y_min
-    maptracker_dir = Path(str(cfg.paths["maptracker_dir"]))
+    base_maptracker_dir = Path(str(cfg.paths["maptracker_dir"]))
+    subset_dir_value = cfg.subset.get("output_dir")
+    subset_dir = (
+        Path(str(subset_dir_value))
+        if subset_dir_value
+        else Path(f"{base_maptracker_dir}_overfit{cfg.subset['num_scenes']}")
+    )
+    maptracker_dir = subset_dir if subset_enabled(cfg) else base_maptracker_dir
     processed_dir = Path(str(cfg.paths["processed_dir"]))
 
     stage1_work = stage_work_dir(cfg, cfg.stage1_config)
@@ -237,6 +257,15 @@ def derive_values(cfg: PipelineConfig) -> dict[str, Any]:
         "pc_range": f"[{x_min},{y_min},-3,{x_max},{y_max},5]",
         "processed_train": processed_dir / "train_infos.pkl",
         "processed_val": processed_dir / "val_infos.pkl",
+        "base_maptracker_dir": base_maptracker_dir,
+        "base_maptracker_train": base_maptracker_dir / "waymo_map_infos_train.pkl",
+        "base_maptracker_val": base_maptracker_dir / "waymo_map_infos_val.pkl",
+        "subset_dir": subset_dir,
+        "subset_train": subset_dir / "waymo_map_infos_train.pkl",
+        "subset_val": subset_dir / "waymo_map_infos_val.pkl",
+        "subset_selected_scenes": subset_dir / "selected_scenes.txt",
+        "subset_summary": subset_dir / "subset_summary.pkl",
+        "maptracker_dir": maptracker_dir,
         "maptracker_train": maptracker_dir / "waymo_map_infos_train.pkl",
         "maptracker_val": maptracker_dir / "waymo_map_infos_val.pkl",
         "maptracker_train_tracks": maptracker_dir / "waymo_map_infos_train_gt_tracks.pkl",
@@ -272,6 +301,10 @@ def generated_configs_enabled(cfg: PipelineConfig) -> bool:
     return bool(cfg.generated_configs.get("enabled", True))
 
 
+def subset_enabled(cfg: PipelineConfig) -> bool:
+    return bool(cfg.subset.get("enabled", False))
+
+
 def active_stage_config(cfg: PipelineConfig, stage_num: str) -> Path:
     if not generated_configs_enabled(cfg):
         return {"1": cfg.stage1_config, "2": cfg.stage2_config, "3": cfg.stage3_config}[stage_num]
@@ -296,6 +329,14 @@ def expand_steps(value: str) -> list[str]:
     return [step for step in PIPELINE_ORDER if step in steps]
 
 
+def filter_optional_steps(cfg: PipelineConfig, steps: list[str], raw_value: str) -> list[str]:
+    explicit_names = {item.strip() for item in raw_value.split(",") if item.strip()}
+    explicit_subset = any(STEP_ALIASES.get(name) == ["subset"] for name in explicit_names)
+    if subset_enabled(cfg) or explicit_subset:
+        return steps
+    return [step for step in steps if step != "subset"]
+
+
 def path_has_tfrecords(path: Path) -> bool:
     return path.is_dir() and any(path.glob("segment-*.tfrecord"))
 
@@ -309,7 +350,13 @@ def produced_paths(cfg: PipelineConfig, step: str) -> list[Path]:
             else []
         ),
         "convert": [d["processed_train"], d["processed_val"]],
-        "pack": [d["maptracker_train"], d["maptracker_val"]],
+        "pack": [d["base_maptracker_train"], d["base_maptracker_val"]],
+        "subset": [
+            d["subset_train"],
+            d["subset_val"],
+            d["subset_selected_scenes"],
+            d["subset_summary"],
+        ],
         "gt_tracks": [d["maptracker_train_tracks"], d["maptracker_val_tracks"]],
         "train_stage1": [d["stage1_checkpoint"]],
         "train_stage2": [d["stage2_checkpoint"]],
@@ -330,6 +377,15 @@ def required_paths(cfg: PipelineConfig, step: str) -> list[tuple[str, Path, str]
         "pack": [
             ("file", d["processed_train"], "pack requires converted train_infos.pkl"),
             ("file", d["processed_val"], "pack requires converted val_infos.pkl"),
+        ],
+        "subset": [
+            (
+                "file",
+                REPO_ROOT / "subset" / "make_waymo_overfit6_subset.py",
+                "subset requires the subset helper script",
+            ),
+            ("file", d["base_maptracker_train"], "subset requires packed train pkl"),
+            ("file", d["base_maptracker_val"], "subset requires packed val pkl"),
         ],
         "gt_tracks": [
             ("file", d["maptracker_train"], "gt_tracks requires packed train pkl"),
@@ -662,6 +718,21 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 cfg.paths["maptracker_dir"],
             ]
             specs.append(CommandSpec(step, command_with_env(cfg, cfg.paths["train_env"], shell_join(args)), cfg.paths["train_env"]))
+        elif step == "subset":
+            args = [
+                "python",
+                "subset/make_waymo_overfit6_subset.py",
+                "--source-dir",
+                d["base_maptracker_dir"],
+                "--output-dir",
+                d["subset_dir"],
+                "--num-scenes",
+                cfg.subset["num_scenes"],
+            ]
+            scenes = cfg.subset.get("scenes") or []
+            if scenes:
+                args.extend(["--scenes", *scenes])
+            specs.append(CommandSpec(step, command_with_env(cfg, cfg.paths["train_env"], shell_join(args)), cfg.paths["train_env"]))
         elif step == "gt_tracks":
             stage1_config = active_stage_config(cfg, "1")
             args = [
@@ -669,7 +740,7 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 "tools/tracking/prepare_gt_tracks.py",
                 rel_config(stage1_config),
                 "--out-dir",
-                Path(str(cfg.paths["maptracker_dir"])) / "track_visualization",
+                d["maptracker_dir"] / "track_visualization",
             ]
             if not generated_configs_enabled(cfg):
                 args.extend(["--cfg-options", *options])
@@ -806,7 +877,7 @@ def main() -> int:
                 for path in generated:
                     print(path)
             return 0
-        steps = expand_steps(args.steps)
+        steps = filter_optional_steps(cfg, expand_steps(args.steps), args.steps)
     except Exception as exc:
         payload = {"status": "error", "requested_steps": [], "missing": [], "commands": [], "error": str(exc)}
         if args.json:

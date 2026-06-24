@@ -54,6 +54,12 @@ def write_config(tmpdir, **overrides):
             "out_dir": "",
             "overwrite": True,
         },
+        "subset": {
+            "enabled": False,
+            "output_dir": "",
+            "num_scenes": 6,
+            "scenes": [],
+        },
         "visualize": {
             "scene_ids": [],
             "per_frame_result": 1,
@@ -99,6 +105,11 @@ def write_config(tmpdir, **overrides):
               enabled: {str(base['generated_configs']['enabled']).lower()}
               out_dir: "{base['generated_configs']['out_dir']}"
               overwrite: {str(base['generated_configs']['overwrite']).lower()}
+            subset:
+              enabled: {str(base['subset']['enabled']).lower()}
+              output_dir: "{base['subset']['output_dir']}"
+              num_scenes: {base['subset']['num_scenes']}
+              scenes: {base['subset']['scenes']}
             visualize:
               scene_ids: []
               per_frame_result: {base['visualize']['per_frame_result']}
@@ -254,7 +265,8 @@ class WaymoPipelineTest(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["status"], "ready")
             self.assertEqual(payload["missing"], [])
-            self.assertEqual(payload["requested_steps"][0], "generate_configs")
+            self.assertIn("generate_configs", payload["requested_steps"])
+            self.assertNotIn("subset", payload["requested_steps"])
 
     def test_train_stage_uses_generated_config_when_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -338,6 +350,128 @@ class WaymoPipelineTest(unittest.TestCase):
                 str(generated_dir / "maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_unit.py"),
                 missing_paths,
             )
+
+    def test_subset_step_generates_subset_command_and_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            subset_dir = tmpdir / "maptracker_subset"
+            cfg = write_config(
+                tmpdir,
+                subset={
+                    "enabled": True,
+                    "output_dir": str(subset_dir),
+                    "num_scenes": 3,
+                },
+            )
+            (tmpdir / "maptracker").mkdir()
+            (tmpdir / "maptracker" / "waymo_map_infos_train.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val.pkl").write_bytes(b"")
+
+            result = subprocess.run(
+                [
+                    "python",
+                    str(SCRIPT),
+                    "--config",
+                    str(cfg),
+                    "--steps",
+                    "subset",
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "ready")
+            self.assertEqual(payload["requested_steps"], ["subset"])
+            command = payload["commands"][0]["command"]
+            self.assertIn("subset/make_waymo_overfit6_subset.py", command)
+            self.assertIn(f"--source-dir {tmpdir}/maptracker", command)
+            self.assertIn(f"--output-dir {subset_dir}", command)
+            self.assertIn("--num-scenes 3", command)
+
+    def test_subset_enabled_makes_downstream_use_subset_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            subset_dir = tmpdir / "maptracker_subset"
+            cfg = write_config(
+                tmpdir,
+                generated_configs={"enabled": False},
+                subset={"enabled": True, "output_dir": str(subset_dir), "num_scenes": 2},
+            )
+            (tmpdir / "maptracker").mkdir()
+            (tmpdir / "maptracker" / "waymo_map_infos_train.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val.pkl").write_bytes(b"")
+
+            result = subprocess.run(
+                [
+                    "python",
+                    str(SCRIPT),
+                    "--config",
+                    str(cfg),
+                    "--steps",
+                    "subset,gt_tracks",
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "ready")
+            gt_command = payload["commands"][1]["command"]
+            self.assertIn(
+                f"data.train.ann_file={subset_dir}/waymo_map_infos_train.pkl",
+                gt_command,
+            )
+            self.assertIn(
+                f"match_config.ann_file={subset_dir}/waymo_map_infos_val.pkl",
+                gt_command,
+            )
+
+    def test_subset_enabled_requires_subset_outputs_for_downstream_without_subset_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            subset_dir = tmpdir / "maptracker_subset"
+            cfg = write_config(
+                tmpdir,
+                generated_configs={"enabled": False},
+                subset={"enabled": True, "output_dir": str(subset_dir)},
+            )
+            (tmpdir / "maptracker").mkdir()
+            (tmpdir / "maptracker" / "waymo_map_infos_train.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val.pkl").write_bytes(b"")
+
+            result = subprocess.run(
+                [
+                    "python",
+                    str(SCRIPT),
+                    "--config",
+                    str(cfg),
+                    "--steps",
+                    "gt_tracks",
+                    "--check-only",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            payload = json.loads(result.stdout)
+            missing_paths = {item["path"] for item in payload["missing"]}
+            self.assertIn(str(subset_dir / "waymo_map_infos_train.pkl"), missing_paths)
+            self.assertIn(str(subset_dir / "waymo_map_infos_val.pkl"), missing_paths)
 
 
 if __name__ == "__main__":

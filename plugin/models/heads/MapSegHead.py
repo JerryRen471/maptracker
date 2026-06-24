@@ -93,7 +93,7 @@ class MapSegHead(nn.Module):
         return visible_mask, (pixel_weight, avg_factor)
 
     def _masked_dice_loss(self, preds, gts, visible_mask):
-        pred = (preds * visible_mask).sigmoid()
+        pred = preds.sigmoid() * visible_mask
         target = gts * visible_mask
         pred = pred.flatten(2)
         target = target.flatten(2)
