@@ -8,6 +8,8 @@ paths:
   maptracker_dir: /data/waymo_maptracker_xm30_x30_y15
   work_root: /data/maptr_workspace/work_dirs
   reuse_images_from: ""
+  mmdet3d_dir: null
+  extra_pythonpath: []
 
 roi:
   x_min: -30

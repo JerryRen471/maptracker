@@ -8,6 +8,8 @@ paths:
   maptracker_dir: /data/waymo_maptracker_xm15_x45_y15
   work_root: /data/maptr_workspace/work_dirs
   reuse_images_from: /data/waymo_processed_v3
+  mmdet3d_dir: null
+  extra_pythonpath: []
 
 configs:
   stage1: plugin/configs/maptracker/waymo_5cam/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain.py

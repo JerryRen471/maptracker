@@ -26,6 +26,8 @@ def write_config(tmpdir, **overrides):
             "maptracker_dir": str(tmpdir / "maptracker"),
             "work_root": str(tmpdir / "work_dirs"),
             "reuse_images_from": "",
+            "mmdet3d_dir": "",
+            "extra_pythonpath": [],
         },
         "configs": {
             "stage1": STAGE1_CONFIG,
@@ -83,6 +85,8 @@ def write_config(tmpdir, **overrides):
               maptracker_dir: {base['paths']['maptracker_dir']}
               work_root: {base['paths']['work_root']}
               reuse_images_from: "{base['paths']['reuse_images_from']}"
+              mmdet3d_dir: "{base['paths']['mmdet3d_dir']}"
+              extra_pythonpath: {base['paths']['extra_pythonpath']}
             configs:
               stage1: {base['configs']['stage1']}
               stage2: {base['configs']['stage2'] or 'null'}
@@ -234,6 +238,8 @@ class WaymoPipelineTest(unittest.TestCase):
             )
             self.assertIn("roi_range='[-15,-15,45,15]'", command)
             self.assertIn(f"load_from={stage1_work}/latest.pth", command)
+            self.assertNotIn("/MapTR/mmdetection3d", command)
+            self.assertIn(":${PYTHONPATH:-}", command)
 
     def test_all_steps_treat_selected_upstream_outputs_as_available(self):
         with tempfile.TemporaryDirectory() as tmp:

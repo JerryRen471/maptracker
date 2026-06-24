@@ -68,6 +68,8 @@ convert -> pack -> subset -> generate_configs -> gt_tracks -> train_stage1 -> tr
 
 其中 `pack` 写入完整 `paths.maptracker_dir`，`subset` 从该目录读取完整 pkl，再写入 `subset.output_dir`。只要 `subset.enabled: true`，后续生成的三阶段配置、GT tracks、训练、评测和可视化都会统一使用 `subset.output_dir` 下的 pkl。
 
+`paths.mmdet3d_dir` 默认为 `null`，表示使用当前 conda 环境里安装的 `mmdet3d`。不要把旧版 `/root/MapTR/mmdetection3d` 填进去，否则可能触发 `mmcv<=1.4.0` 的旧版本断言。
+
 示例配置：
 
 ```yaml

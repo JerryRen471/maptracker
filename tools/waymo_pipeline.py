@@ -164,6 +164,8 @@ def build_config(raw: dict[str, Any], config_file: Path | None = None) -> Pipeli
         "maptracker_dir": "/data/waymo_maptracker_xm15_x45_y15",
         "work_root": "/data/maptr_workspace/work_dirs",
         "reuse_images_from": "/data/waymo_processed_v3",
+        "mmdet3d_dir": None,
+        "extra_pythonpath": [],
     }
     paths.update(section(raw, "paths"))
 
@@ -640,15 +642,19 @@ def shell_quote(part: Any) -> str:
 
 def command_with_env(cfg: PipelineConfig, env_name: str, body: str) -> str:
     conda_home = cfg.paths["conda_home"]
-    pythonpath = (
-        f"{REPO_ROOT}:{REPO_ROOT / 'MapTR/mmdetection3d'}:"
-        f"{WORKSPACE_ROOT / 'MapTR/mmdetection3d'}:${{PYTHONPATH:-}}"
-    )
+    pythonpath_entries: list[str] = [str(REPO_ROOT)]
+    if cfg.paths.get("mmdet3d_dir"):
+        pythonpath_entries.append(str(cfg.paths["mmdet3d_dir"]))
+    extra_pythonpath = cfg.paths.get("extra_pythonpath") or []
+    if isinstance(extra_pythonpath, str):
+        extra_pythonpath = [extra_pythonpath]
+    pythonpath_entries.extend(str(path) for path in extra_pythonpath if path)
+    pythonpath_prefix = ":".join(pythonpath_entries)
     return (
         f"source {shlex.quote(str(conda_home))}/etc/profile.d/conda.sh && "
         f"conda activate {shlex.quote(str(env_name))} && "
         f"cd {shlex.quote(str(REPO_ROOT))} && "
-        f"export PYTHONPATH={shlex.quote(pythonpath)} && "
+        f"export PYTHONPATH={shlex.quote(pythonpath_prefix)}:${{PYTHONPATH:-}} && "
         f"{body}"
     )
 
