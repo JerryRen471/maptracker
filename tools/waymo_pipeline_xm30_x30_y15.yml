@@ -32,6 +32,15 @@ generated_configs:
   enabled: true
   out_dir: null
   overwrite: true
+  schedule:
+    auto_from_data: true
+    num_epochs: 20
+    num_iters_per_epoch: null
+    min_iters_per_epoch: 1
+    update_evaluation: true
+    update_checkpoint: true
+    adjust_warmup: true
+    warmup_ratio: 0.1
 
 subset:
   enabled: true

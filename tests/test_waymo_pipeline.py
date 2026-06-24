@@ -1,6 +1,9 @@
+import importlib.util
 import json
 import pathlib
+import pickle
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -12,6 +15,26 @@ STAGE1_CONFIG = (
     "plugin/configs/maptracker/waymo_5cam/"
     "maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain.py"
 )
+
+
+def load_pipeline_module():
+    spec = importlib.util.spec_from_file_location("waymo_pipeline", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_maptracker_payload(path, sample_count):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "samples": [
+            {"scene_name": f"scene_{index // 40:03d}", "sample_idx": index}
+            for index in range(sample_count)
+        ]
+    }
+    with path.open("wb") as f:
+        pickle.dump(payload, f)
 
 
 def write_config(tmpdir, **overrides):
@@ -55,6 +78,7 @@ def write_config(tmpdir, **overrides):
             "enabled": True,
             "out_dir": "",
             "overwrite": True,
+            "schedule": {},
         },
         "subset": {
             "enabled": False,
@@ -109,6 +133,7 @@ def write_config(tmpdir, **overrides):
               enabled: {str(base['generated_configs']['enabled']).lower()}
               out_dir: "{base['generated_configs']['out_dir']}"
               overwrite: {str(base['generated_configs']['overwrite']).lower()}
+              schedule: {base['generated_configs']['schedule']}
             subset:
               enabled: {str(base['subset']['enabled']).lower()}
               output_dir: "{base['subset']['output_dir']}"
@@ -356,6 +381,72 @@ class WaymoPipelineTest(unittest.TestCase):
                 str(generated_dir / "maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_unit.py"),
                 missing_paths,
             )
+
+    def test_generated_schedule_uses_subset_sample_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            subset_dir = tmpdir / "maptracker_subset"
+            cfg_path = write_config(
+                tmpdir,
+                runtime={"num_gpus": 4},
+                subset={"enabled": True, "output_dir": str(subset_dir)},
+            )
+            write_maptracker_payload(subset_dir / "waymo_map_infos_train.pkl", 240)
+
+            pipeline = load_pipeline_module()
+            cfg = pipeline.build_config(pipeline.load_config(cfg_path), config_file=cfg_path)
+            stage_cfg = {
+                "num_gpus": 4,
+                "batch_size": 1,
+                "num_epochs": 3,
+                "num_epochs_interval": 1,
+                "total_iters": 75624,
+                "runner": {"type": "MyRunnerWrapper", "max_iters": 75624},
+                "evaluation": {"interval": 25208},
+                "checkpoint_config": {"interval": 25208},
+                "lr_config": {"warmup_iters": 500},
+            }
+
+            overrides = pipeline.schedule_override_dict(cfg, stage_cfg)
+
+            self.assertEqual(overrides["num_train_samples"], 240)
+            self.assertEqual(overrides["num_iters_per_epoch"], 60)
+            self.assertEqual(overrides["total_iters"], 180)
+            self.assertEqual(overrides["runner.max_iters"], 180)
+            self.assertEqual(overrides["evaluation.interval"], 60)
+            self.assertEqual(overrides["checkpoint_config.interval"], 60)
+            self.assertEqual(overrides["lr_config.warmup_iters"], 18)
+
+    def test_generated_schedule_allows_num_epochs_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            subset_dir = tmpdir / "maptracker_subset"
+            cfg_path = write_config(
+                tmpdir,
+                runtime={"num_gpus": 2},
+                generated_configs={"schedule": {"num_epochs": 20}},
+                subset={"enabled": True, "output_dir": str(subset_dir)},
+            )
+            write_maptracker_payload(subset_dir / "waymo_map_infos_train.pkl", 240)
+
+            pipeline = load_pipeline_module()
+            cfg = pipeline.build_config(pipeline.load_config(cfg_path), config_file=cfg_path)
+            stage_cfg = {
+                "batch_size": 3,
+                "num_epochs": 3,
+                "num_epochs_interval": 1,
+                "runner": {"max_iters": 75624},
+                "checkpoint_config": {"interval": 25208},
+                "lr_config": {"warmup_iters": 500},
+            }
+
+            overrides = pipeline.schedule_override_dict(cfg, stage_cfg)
+
+            self.assertEqual(overrides["num_iters_per_epoch"], 40)
+            self.assertEqual(overrides["num_epochs"], 20)
+            self.assertEqual(overrides["total_iters"], 800)
+            self.assertEqual(overrides["runner.max_iters"], 800)
+            self.assertEqual(overrides["lr_config.warmup_iters"], 80)
 
     def test_subset_step_generates_subset_command_and_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:

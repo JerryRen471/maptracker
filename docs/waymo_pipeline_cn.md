@@ -70,9 +70,28 @@ convert -> pack -> subset -> generate_configs -> gt_tracks -> train_stage1 -> tr
 
 `paths.mmdet3d_dir` 默认为 `null`，表示使用当前 conda 环境里安装的 `mmdet3d`。不要把旧版 `/root/MapTR/mmdetection3d` 填进去，否则可能触发 `mmcv<=1.4.0` 的旧版本断言。
 
+生成三阶段训练配置时，`generated_configs.schedule.auto_from_data: true` 会从当前有效的 `waymo_map_infos_train.pkl` 读取样本数，并自动重算：
+
+```text
+num_iters_per_epoch = train_samples // (num_gpus * batch_size)
+total_iters         = num_epochs * num_iters_per_epoch
+runner.max_iters
+evaluation.interval
+checkpoint_config.interval
+lr_config.warmup_iters
+```
+
+对 subset 训练，可以用 `generated_configs.schedule.num_epochs` 增加过拟合轮数。例如 6 个 scene 共 240 帧、4 GPU、Stage1 batch_size=1、num_epochs=20 时，Stage1 会生成约 `20 * (240 // 4) = 1200` iter，而不是完整 Waymo 配置里的 75624 iter。
+
 示例配置：
 
 ```yaml
+generated_configs:
+  enabled: true
+  schedule:
+    auto_from_data: true
+    num_epochs: 20
+
 subset:
   enabled: true
   output_dir: /data/waymo_maptracker_xm30_x30_y15_overfit6

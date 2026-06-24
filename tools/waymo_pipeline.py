@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pickle
 import shlex
 import subprocess
 import sys
@@ -198,8 +199,21 @@ def build_config(raw: dict[str, Any], config_file: Path | None = None) -> Pipeli
         "enabled": True,
         "out_dir": None,
         "overwrite": True,
+        "schedule": {},
     }
     generated_configs.update(section(raw, "generated_configs"))
+    schedule = {
+        "auto_from_data": True,
+        "num_epochs": None,
+        "num_iters_per_epoch": None,
+        "min_iters_per_epoch": 1,
+        "update_evaluation": True,
+        "update_checkpoint": True,
+        "adjust_warmup": True,
+        "warmup_ratio": 0.1,
+    }
+    schedule.update(generated_configs.get("schedule") or {})
+    generated_configs["schedule"] = schedule
 
     subset = {
         "enabled": False,
@@ -307,6 +321,11 @@ def subset_enabled(cfg: PipelineConfig) -> bool:
     return bool(cfg.subset.get("enabled", False))
 
 
+def schedule_auto_from_data(cfg: PipelineConfig) -> bool:
+    schedule = cfg.generated_configs.get("schedule") or {}
+    return bool(generated_configs_enabled(cfg) and schedule.get("auto_from_data", True))
+
+
 def active_stage_config(cfg: PipelineConfig, stage_num: str) -> Path:
     if not generated_configs_enabled(cfg):
         return {"1": cfg.stage1_config, "2": cfg.stage2_config, "3": cfg.stage3_config}[stage_num]
@@ -375,7 +394,12 @@ def required_paths(cfg: PipelineConfig, step: str) -> list[tuple[str, Path, str]
             ("file", cfg.stage1_config, "generate_configs requires base stage1 config"),
             ("file", cfg.stage2_config, "generate_configs requires base stage2 config"),
             ("file", cfg.stage3_config, "generate_configs requires base stage3 config"),
-        ],
+        ]
+        + (
+            [("file", d["maptracker_train"], "generate_configs schedule auto-calculation requires train pkl")]
+            if schedule_auto_from_data(cfg)
+            else []
+        ),
         "pack": [
             ("file", d["processed_train"], "pack requires converted train_infos.pkl"),
             ("file", d["processed_val"], "pack requires converted val_infos.pkl"),
@@ -595,6 +619,89 @@ def cfg_override_dict(cfg: PipelineConfig, stage_num: str) -> dict[str, Any]:
     return overrides
 
 
+def config_value(config: Any, key: str, default: Any = None) -> Any:
+    if isinstance(config, dict):
+        return config.get(key, default)
+    try:
+        return config.get(key, default)
+    except AttributeError:
+        return getattr(config, key, default)
+
+
+def nested_config_value(config: Any, keys: list[str], default: Any = None) -> Any:
+    current = config
+    for key in keys:
+        current = config_value(current, key, default)
+        if current is default:
+            return default
+    return current
+
+
+def count_train_samples(path: Path) -> int:
+    with path.open("rb") as f:
+        payload = pickle.load(f)
+    if isinstance(payload, dict) and "samples" in payload:
+        return len(payload["samples"])
+    if isinstance(payload, list):
+        return len(payload)
+    raise ValueError(f"cannot infer train sample count from {path}")
+
+
+def schedule_override_dict(cfg: PipelineConfig, stage_cfg: Any) -> dict[str, Any]:
+    schedule = cfg.generated_configs.get("schedule") or {}
+    if not schedule.get("auto_from_data", True):
+        return {}
+
+    sample_count = schedule.get("sample_count")
+    if sample_count is None:
+        sample_count = count_train_samples(cfg.derived["maptracker_train"])
+    sample_count = int(sample_count)
+
+    num_gpus = int(cfg.runtime.get("num_gpus") or len(str(cfg.runtime["gpus"]).split(",")))
+    batch_size = int(
+        config_value(
+            stage_cfg,
+            "batch_size",
+            nested_config_value(stage_cfg, ["data", "samples_per_gpu"], 1),
+        )
+    )
+    global_batch_size = max(1, num_gpus * batch_size)
+    min_iters = int(schedule.get("min_iters_per_epoch", 1))
+    configured_iters = schedule.get("num_iters_per_epoch")
+    if configured_iters is None:
+        num_iters_per_epoch = max(min_iters, sample_count // global_batch_size)
+    else:
+        num_iters_per_epoch = max(min_iters, int(configured_iters))
+
+    num_epochs = int(schedule.get("num_epochs") or config_value(stage_cfg, "num_epochs", 1))
+    num_epochs_interval = int(config_value(stage_cfg, "num_epochs_interval", 1))
+    interval = max(1, num_epochs_interval * num_iters_per_epoch)
+    total_iters = max(1, num_epochs * num_iters_per_epoch)
+
+    overrides: dict[str, Any] = {
+        "num_train_samples": sample_count,
+        "num_gpus": num_gpus,
+        "batch_size": batch_size,
+        "num_iters_per_epoch": num_iters_per_epoch,
+        "num_epochs": num_epochs,
+        "total_iters": total_iters,
+        "runner.max_iters": total_iters,
+    }
+    if schedule.get("update_evaluation", True):
+        overrides["evaluation.interval"] = interval
+    if schedule.get("update_checkpoint", True):
+        overrides["checkpoint_config.interval"] = interval
+
+    if schedule.get("adjust_warmup", True):
+        warmup_iters = nested_config_value(stage_cfg, ["lr_config", "warmup_iters"], None)
+        if warmup_iters is not None:
+            warmup_ratio = float(schedule.get("warmup_ratio", 0.1))
+            scaled_warmup = max(1, int(total_iters * warmup_ratio))
+            overrides["lr_config.warmup_iters"] = min(int(warmup_iters), scaled_warmup)
+
+    return overrides
+
+
 def materialize_configs(cfg: PipelineConfig) -> list[Path]:
     if not generated_configs_enabled(cfg):
         return []
@@ -622,6 +729,7 @@ def materialize_configs(cfg: PipelineConfig) -> list[Path]:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         stage_cfg = Config.fromfile(str(base_paths[stage_num]))
         stage_cfg.merge_from_dict(cfg_override_dict(cfg, stage_num))
+        stage_cfg.merge_from_dict(schedule_override_dict(cfg, stage_cfg))
         stage_cfg.dump(str(out_path))
         generated.append(out_path)
     return generated
