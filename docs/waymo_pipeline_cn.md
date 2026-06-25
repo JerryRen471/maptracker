@@ -46,7 +46,7 @@ python tools/waymo_pipeline.py \
 
 ```text
 convert, pack, subset, generate_configs, gt_tracks,
-train_stage1, train_stage2, train_stage3, test, visualize
+train_stage1, train_stage2, train_stage3, test, visualize, visualize_semantic
 ```
 
 常用别名：
@@ -57,7 +57,9 @@ train        train_stage1,train_stage2,train_stage3
 stage1/2/3   单独训练某个阶段
 configs      generate_configs
 pack_subset  subset
-vis          visualize
+vis          visualize + visualize_semantic
+vis_global   只做 vector/global 可视化
+vis_seg      只做 BEV semantic segmentation 可视化
 ```
 
 `subset` 阶段由配置中的 `subset.enabled` 控制。启用后，完整流程会变成：
@@ -117,6 +119,37 @@ subset:
   scenes:
     - segment-xxx
     - segment-yyy
+```
+
+`visualize` 会同时运行 vector/global 可视化和 BEV semantic segmentation 可视化。BEV semantic 部分调用 `tools/check_seg.py`，默认使用 Stage1 checkpoint，可通过配置调整：
+
+```yaml
+visualize:
+  scene_ids: []
+  semantic:
+    enabled: true
+    stage: stage1
+    split: val
+    max_frames: 24
+    workers_per_gpu: 0
+    device_id: 0
+    score_heatmaps: true
+```
+
+只看 BEV segmentation：
+
+```bash
+python tools/waymo_pipeline.py \
+  --config tools/waymo_pipeline_xm30_x30_y15.yml \
+  --steps visualize_semantic
+```
+
+只看 vector/global：
+
+```bash
+python tools/waymo_pipeline.py \
+  --config tools/waymo_pipeline_xm30_x30_y15.yml \
+  --steps visualize_vectors
 ```
 
 ## 3. 旧版 shell 脚本最小运行命令

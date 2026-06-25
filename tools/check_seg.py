@@ -30,6 +30,8 @@ PALETTE = {
 
 
 def parse_args() -> argparse.Namespace:
+    from mmcv import DictAction
+
     parser = argparse.ArgumentParser(
         description="Render BEV semantic GT, predicted masks, and per-class score heatmaps."
     )
@@ -51,6 +53,13 @@ def parse_args() -> argparse.Namespace:
         "--no-score-heatmaps",
         action="store_true",
         help="Only render GT/predicted hard masks and side-by-side summaries",
+    )
+    parser.add_argument(
+        "--cfg-options",
+        nargs="+",
+        action=DictAction,
+        default={},
+        help="Override config options, same format as tools/train.py.",
     )
     return parser.parse_args()
 
@@ -159,6 +168,8 @@ def render(args: argparse.Namespace) -> None:
     from plugin.datasets.builder import build_dataloader
 
     cfg = Config.fromfile(args.config)
+    if args.cfg_options:
+        cfg.merge_from_dict(args.cfg_options)
     import_plugin(cfg)
 
     dataset_cfg = select_dataset_cfg(cfg, args.split)

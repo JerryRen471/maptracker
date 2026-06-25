@@ -90,6 +90,7 @@ def write_config(tmpdir, **overrides):
             "scene_ids": [],
             "per_frame_result": 1,
             "overwrite": 1,
+            "semantic": {},
         },
     }
     for section, values in overrides.items():
@@ -143,6 +144,7 @@ def write_config(tmpdir, **overrides):
               scene_ids: []
               per_frame_result: {base['visualize']['per_frame_result']}
               overwrite: {base['visualize']['overwrite']}
+              semantic: {base['visualize']['semantic']}
             """
         ).strip()
         + "\n",
@@ -569,6 +571,117 @@ class WaymoPipelineTest(unittest.TestCase):
             missing_paths = {item["path"] for item in payload["missing"]}
             self.assertIn(str(subset_dir / "waymo_map_infos_train.pkl"), missing_paths)
             self.assertIn(str(subset_dir / "waymo_map_infos_val.pkl"), missing_paths)
+
+    def test_visualize_includes_semantic_segmentation_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            generated_dir = tmpdir / "generated"
+            cfg = write_config(
+                tmpdir,
+                generated_configs={"out_dir": str(generated_dir)},
+                visualize={"semantic": {"max_frames": 5, "split": "val"}},
+            )
+            generated_dir.mkdir()
+            stage1_config = generated_dir / "maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_unit.py"
+            stage3_config = generated_dir / "maptracker_waymo_5cam_5frame_span10_stage3_joint_finetune_unit.py"
+            stage1_config.write_text("# stage1\n", encoding="utf-8")
+            stage3_config.write_text("# stage3\n", encoding="utf-8")
+            (tmpdir / "maptracker").mkdir()
+            (tmpdir / "maptracker" / "waymo_map_infos_val_gt_tracks.pkl").write_bytes(b"")
+            stage1_work = (
+                tmpdir
+                / "work_dirs"
+                / "maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain_unit"
+            )
+            stage3_work = (
+                tmpdir
+                / "work_dirs"
+                / "maptracker_waymo_5cam_5frame_span10_stage3_joint_finetune_unit"
+            )
+            (stage1_work).mkdir(parents=True)
+            (stage3_work / "eval").mkdir(parents=True)
+            (stage1_work / "latest.pth").write_bytes(b"")
+            (stage3_work / "latest.pth").write_bytes(b"")
+            (stage3_work / "eval" / "pos_predictions.pkl").write_bytes(b"")
+
+            result = subprocess.run(
+                [
+                    "python",
+                    str(SCRIPT),
+                    "--config",
+                    str(cfg),
+                    "--steps",
+                    "visualize",
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["requested_steps"], ["visualize", "visualize_semantic"])
+            self.assertEqual([item["step"] for item in payload["commands"]], [
+                "visualize_pred",
+                "visualize_gt",
+                "visualize_semantic",
+            ])
+            semantic_command = payload["commands"][2]["command"]
+            self.assertIn("tools/check_seg.py", semantic_command)
+            self.assertIn(f"--config {stage1_config}", semantic_command)
+            self.assertIn(f"--checkpoint {stage1_work}/latest.pth", semantic_command)
+            self.assertIn(f"--out-dir {stage3_work}/visualization/semantic", semantic_command)
+            self.assertIn("--split val", semantic_command)
+            self.assertIn("--max-frames 5", semantic_command)
+
+    def test_visualize_semantic_can_run_without_vector_predictions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            generated_dir = tmpdir / "generated"
+            cfg = write_config(
+                tmpdir,
+                generated_configs={"out_dir": str(generated_dir)},
+                visualize={"semantic": {"stage": "stage2", "max_frames": 2}},
+            )
+            generated_dir.mkdir()
+            stage2_config = generated_dir / "maptracker_waymo_5cam_5frame_span10_stage2_warmup_unit.py"
+            stage2_config.write_text("# stage2\n", encoding="utf-8")
+            stage2_work = (
+                tmpdir
+                / "work_dirs"
+                / "maptracker_waymo_5cam_5frame_span10_stage2_warmup_unit"
+            )
+            stage2_work.mkdir(parents=True)
+            (stage2_work / "latest.pth").write_bytes(b"")
+
+            result = subprocess.run(
+                [
+                    "python",
+                    str(SCRIPT),
+                    "--config",
+                    str(cfg),
+                    "--steps",
+                    "visualize_semantic",
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["requested_steps"], ["visualize_semantic"])
+            self.assertEqual(len(payload["commands"]), 1)
+            command = payload["commands"][0]["command"]
+            self.assertIn("tools/check_seg.py", command)
+            self.assertIn(f"--config {stage2_config}", command)
+            self.assertNotIn("tools/visualization/vis_global.py", command)
 
 
 if __name__ == "__main__":

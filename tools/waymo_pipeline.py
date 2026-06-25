@@ -31,6 +31,7 @@ PIPELINE_ORDER = [
     "train_stage3",
     "test",
     "visualize",
+    "visualize_semantic",
 ]
 
 STEP_ALIASES = {
@@ -48,8 +49,13 @@ STEP_ALIASES = {
     "gt_tracks": ["gt_tracks"],
     "test": ["test"],
     "eval": ["test"],
-    "visualize": ["visualize"],
-    "vis": ["visualize"],
+    "visualize": ["visualize", "visualize_semantic"],
+    "vis": ["visualize", "visualize_semantic"],
+    "visualize_vectors": ["visualize"],
+    "vis_global": ["visualize"],
+    "visualize_semantic": ["visualize_semantic"],
+    "vis_seg": ["visualize_semantic"],
+    "check_seg": ["visualize_semantic"],
     "train_stage1": ["train_stage1"],
     "train_stage2": ["train_stage2"],
     "train_stage3": ["train_stage3"],
@@ -99,7 +105,7 @@ def parse_args() -> argparse.Namespace:
         "--steps",
         default="all",
         help="Comma-separated steps or aliases: all, convert, pack, subset, gt_tracks, train, "
-        "train_stage1, train_stage2, train_stage3, test, visualize",
+        "train_stage1, train_stage2, train_stage3, test, visualize, visualize_semantic",
     )
     parser.add_argument("--check-only", action="store_true", help="Only check prerequisites")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them")
@@ -190,6 +196,26 @@ def build_config(raw: dict[str, Any], config_file: Path | None = None) -> Pipeli
 
     visualize = {"scene_ids": [], "per_frame_result": 1, "overwrite": 1}
     visualize.update(section(raw, "visualize"))
+    semantic_vis = {
+        "enabled": True,
+        "stage": "stage1",
+        "split": "val",
+        "out_dir": None,
+        "max_frames": None,
+        "workers_per_gpu": 0,
+        "device_id": 0,
+        "score_dpi": 140,
+        "score_heatmaps": True,
+    }
+    semantic_raw = visualize.get("semantic", {})
+    if isinstance(semantic_raw, bool):
+        semantic_raw = {"enabled": semantic_raw}
+    elif semantic_raw is None:
+        semantic_raw = {}
+    if not isinstance(semantic_raw, dict):
+        raise ValueError("config section 'visualize.semantic' must be a mapping or boolean")
+    semantic_vis.update(semantic_raw)
+    visualize["semantic"] = semantic_vis
 
     stage1_config = config_path(stage1_value)
     stage2_config = config_path(stage2_value)
@@ -263,6 +289,7 @@ def derive_values(cfg: PipelineConfig) -> dict[str, Any]:
     stage2_work = stage_work_dir(cfg, cfg.stage2_config)
     stage3_work = stage_work_dir(cfg, cfg.stage3_config)
     generated_out_dir = generated_config_dir(cfg)
+    vis_out_dir = Path(str(cfg.visualize.get("out_dir") or (stage3_work / "visualization")))
     generated_stage1 = generated_out_dir / f"{cfg.stage1_config.stem}_{cfg.runtime['exp_tag']}.py"
     generated_stage2 = generated_out_dir / f"{cfg.stage2_config.stem}_{cfg.runtime['exp_tag']}.py"
     generated_stage3 = generated_out_dir / f"{cfg.stage3_config.stem}_{cfg.runtime['exp_tag']}.py"
@@ -297,7 +324,10 @@ def derive_values(cfg: PipelineConfig) -> dict[str, Any]:
         "generated_stage2_config": generated_stage2,
         "generated_stage3_config": generated_stage3,
         "test_work_dir": Path(str(cfg.runtime.get("test_work_dir") or (stage3_work / "eval"))),
-        "vis_out_dir": Path(str(cfg.visualize.get("out_dir") or (stage3_work / "visualization"))),
+        "vis_out_dir": vis_out_dir,
+        "vis_semantic_out_dir": Path(
+            str(cfg.visualize["semantic"].get("out_dir") or (vis_out_dir / "semantic"))
+        ),
     }
 
 
@@ -321,6 +351,10 @@ def subset_enabled(cfg: PipelineConfig) -> bool:
     return bool(cfg.subset.get("enabled", False))
 
 
+def visualize_semantic_enabled(cfg: PipelineConfig) -> bool:
+    return bool(cfg.visualize.get("semantic", {}).get("enabled", True))
+
+
 def schedule_auto_from_data(cfg: PipelineConfig) -> bool:
     schedule = cfg.generated_configs.get("schedule") or {}
     return bool(generated_configs_enabled(cfg) and schedule.get("auto_from_data", True))
@@ -333,6 +367,25 @@ def active_stage_config(cfg: PipelineConfig, stage_num: str) -> Path:
         "1": cfg.derived["generated_stage1_config"],
         "2": cfg.derived["generated_stage2_config"],
         "3": cfg.derived["generated_stage3_config"],
+    }[stage_num]
+
+
+def normalize_stage_num(value: Any) -> str:
+    text = str(value).strip().lower()
+    if text.startswith("train_"):
+        text = text[len("train_") :]
+    if text.startswith("stage"):
+        text = text[len("stage") :]
+    if text not in {"1", "2", "3"}:
+        raise ValueError(f"invalid stage for semantic visualization: {value}")
+    return text
+
+
+def stage_checkpoint(cfg: PipelineConfig, stage_num: str) -> Path:
+    return {
+        "1": cfg.derived["stage1_checkpoint"],
+        "2": cfg.derived["stage2_checkpoint"],
+        "3": cfg.derived["stage3_checkpoint"],
     }[stage_num]
 
 
@@ -353,9 +406,14 @@ def expand_steps(value: str) -> list[str]:
 def filter_optional_steps(cfg: PipelineConfig, steps: list[str], raw_value: str) -> list[str]:
     explicit_names = {item.strip() for item in raw_value.split(",") if item.strip()}
     explicit_subset = any(STEP_ALIASES.get(name) == ["subset"] for name in explicit_names)
+    explicit_semantic = any(STEP_ALIASES.get(name) == ["visualize_semantic"] for name in explicit_names)
     if subset_enabled(cfg) or explicit_subset:
-        return steps
-    return [step for step in steps if step != "subset"]
+        filtered = steps
+    else:
+        filtered = [step for step in steps if step != "subset"]
+    if visualize_semantic_enabled(cfg) or explicit_semantic:
+        return filtered
+    return [step for step in filtered if step != "visualize_semantic"]
 
 
 def path_has_tfrecords(path: Path) -> bool:
@@ -384,6 +442,7 @@ def produced_paths(cfg: PipelineConfig, step: str) -> list[Path]:
         "train_stage3": [d["stage3_checkpoint"]],
         "test": [d["test_work_dir"] / "pos_predictions.pkl"],
         "visualize": [d["vis_out_dir"] / "pred", d["vis_out_dir"] / "gt"],
+        "visualize_semantic": [d["vis_semantic_out_dir"]],
     }.get(step, [])
 
 
@@ -450,6 +509,19 @@ def required_paths(cfg: PipelineConfig, step: str) -> list[tuple[str, Path, str]
             ("file", d["test_work_dir"] / "pos_predictions.pkl", "visualize requires predictions"),
             ("file", d["maptracker_val_tracks"], "visualize requires val GT tracks"),
             ("file", active_stage_config(cfg, "3"), "visualize requires stage3 config"),
+        ],
+        "visualize_semantic": [
+            ("file", REPO_ROOT / "tools" / "check_seg.py", "visualize_semantic requires check_seg.py"),
+            (
+                "file",
+                active_stage_config(cfg, normalize_stage_num(cfg.visualize["semantic"].get("stage", "stage1"))),
+                "visualize_semantic requires the selected stage config",
+            ),
+            (
+                "file",
+                stage_checkpoint(cfg, normalize_stage_num(cfg.visualize["semantic"].get("stage", "stage1"))),
+                "visualize_semantic requires the selected stage checkpoint",
+            ),
         ],
     }
     return requirements.get(step, [])
@@ -937,6 +1009,39 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 gt_args.extend(["--cfg-options", *options])
             specs.append(CommandSpec("visualize_pred", command_with_env(cfg, cfg.paths["train_env"], shell_join(pred_args)), cfg.paths["train_env"]))
             specs.append(CommandSpec("visualize_gt", command_with_env(cfg, cfg.paths["train_env"], shell_join(gt_args)), cfg.paths["train_env"]))
+        elif step == "visualize_semantic":
+            semantic = cfg.visualize["semantic"]
+            stage_num = normalize_stage_num(semantic.get("stage", "stage1"))
+            scene_args = []
+            if cfg.visualize.get("scene_ids"):
+                scene_args = ["--scene-id", *cfg.visualize["scene_ids"]]
+            args = [
+                "python",
+                "tools/check_seg.py",
+                "--config",
+                active_stage_config(cfg, stage_num),
+                "--checkpoint",
+                stage_checkpoint(cfg, stage_num),
+                "--out-dir",
+                d["vis_semantic_out_dir"],
+                "--split",
+                semantic.get("split", "val"),
+                "--workers-per-gpu",
+                semantic.get("workers_per_gpu", 0),
+                "--device-id",
+                semantic.get("device_id", 0),
+                "--score-dpi",
+                semantic.get("score_dpi", 140),
+                *scene_args,
+            ]
+            if semantic.get("max_frames") is not None:
+                args.extend(["--max-frames", semantic["max_frames"]])
+            if not semantic.get("score_heatmaps", True):
+                args.append("--no-score-heatmaps")
+            if not generated_configs_enabled(cfg):
+                args.extend(["--cfg-options", *options])
+            body = f"CUDA_VISIBLE_DEVICES={shlex.quote(gpus)} {shell_join(args)}"
+            specs.append(CommandSpec("visualize_semantic", command_with_env(cfg, cfg.paths["train_env"], body), cfg.paths["train_env"]))
     return specs
 
 

@@ -52,3 +52,13 @@ visualize:
   scene_ids: []
   per_frame_result: 1
   overwrite: 1
+  semantic:
+    enabled: true
+    stage: stage1
+    split: val
+    out_dir: null
+    max_frames: 24
+    workers_per_gpu: 0
+    device_id: 0
+    score_dpi: 140
+    score_heatmaps: true
