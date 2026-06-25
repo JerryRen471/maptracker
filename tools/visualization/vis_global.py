@@ -97,6 +97,16 @@ def parse_args():
 
     return args
 
+
+def scene_has_prediction_vectors(scene_name, pred_results):
+    for result in pred_results:
+        if result.get("scene_name") != scene_name:
+            continue
+        vectors = result.get("vectors", [])
+        if vectors is not None and len(vectors) > 0:
+            return True
+    return False
+
 def combine_images_with_labels(image_paths, labels, output_path, font_scale=0.5, font_color=(0, 0, 0)):
     # Load images
     images = [cv2.imread(path) for path in image_paths]
@@ -1161,6 +1171,12 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     for index in range(len(pred_results)):
         if pred_results[index]["scene_name"] == scene_name:
             index_list.append(index)
+    if len(index_list) == 0:
+        print(f"[vis-pred] skip scene {scene_name}: no prediction entries")
+        return False
+    if not scene_has_prediction_vectors(scene_name, pred_results):
+        print(f"[vis-pred] skip scene {scene_name}: no predicted vectors")
+        return False
     
     car_trajectory = []
     id_prev2curr_pred_vectors = defaultdict(list)
@@ -1216,6 +1232,9 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     
     # sort the id_prev2curr_pred_vectors
     id_prev2curr_pred_vectors = {key: id_prev2curr_pred_vectors[key] for key in sorted(id_prev2curr_pred_vectors)}
+    if len(id_prev2curr_pred_vectors) == 0:
+        print(f"[vis-pred] skip scene {scene_name}: no drawable predicted vectors")
+        return False
 
     
     # set the size of the image
@@ -1226,8 +1245,13 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
 
     all_points = []
     for vecs in id_prev2curr_pred_vectors.values():
+        if len(vecs) == 0:
+            continue
         points = np.concatenate(vecs, axis=0)
         all_points.append(points)
+    if len(all_points) == 0:
+        print(f"[vis-pred] skip scene {scene_name}: no drawable predicted points")
+        return False
     all_points = np.concatenate(all_points, axis=0)
 
     x_min = min(x_min, all_points[:,0].min())
@@ -1253,6 +1277,7 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     labels = ['Merged', 'Unmerged']
     combine_images_with_labels(image_paths, labels, comb_save_path)
     print("image saved to : ", comb_save_path)
+    return True
 
 def vis_gt_data(scene_name, args, dataset, gt_data, origin, roi_size):
 
