@@ -85,6 +85,13 @@ lr_config.warmup_iters
 
 对 subset 训练，可以用 `generated_configs.schedule.num_epochs` 增加过拟合轮数。例如 6 个 scene 共 240 帧、4 GPU、Stage1 batch_size=1、num_epochs=20 时，Stage1 会生成约 `20 * (240 // 4) = 1200` iter，而不是完整 Waymo 配置里的 75624 iter。
 
+如果需要给 Stage1 指定初始化 checkpoint，在 `runtime.init_ckpt` 中填写路径即可。该字段只影响 Stage1，会被转换为 `load_from=<init_ckpt>`；Stage2 仍默认加载 Stage1 work_dir 下的 `latest.pth`，Stage3 仍默认加载 Stage2 work_dir 下的 `latest.pth`。
+
+```yaml
+runtime:
+  init_ckpt: /path/to/init_stage1.pth
+```
+
 示例配置：
 
 ```yaml
@@ -242,6 +249,8 @@ x_min=-15, y_min=-15, x_max=45, y_max=15
 3. python tools/tracking/prepare_gt_tracks.py ...
 
 4. bash tools/dist_train.sh stage1_config ...
+   # 如果 runtime.init_ckpt 非空：
+   --cfg-options load_from=<init_ckpt>
 
 5. bash tools/dist_train.sh stage2_config ...
    --cfg-options load_from=<stage1_work_dir>/latest.pth
@@ -401,7 +410,8 @@ bash tools/run_waymo_pipeline.sh \
 2. 打包、GT track、训练、评测、可视化默认在 `maptracker` 环境中运行。
 3. 脚本是前台顺序执行。SSH 断开会影响运行，长任务建议配合 `tmux` 或 `screen`。
 4. Stage2 依赖 Stage1 的 `latest.pth`，Stage3 依赖 Stage2 的 `latest.pth`。
-5. `tools/test.py` 默认读取 Stage3 work_dir 下的 `latest.pth`。
-6. 可视化预测结果默认读取 `<stage3_work_dir>/eval/pos_predictions.pkl`。
-7. 可视化 GT 默认读取 `<maptracker_dir>/waymo_map_infos_val_gt_tracks.pkl`。
-8. 脚本不会检查 pkl 中的 ROI metadata 是否和 config 完全一致，运行前需要人工确认数据目录和 config 对应。
+5. `runtime.init_ckpt` 只作为 Stage1 的初始化 checkpoint，不改变 Stage2/Stage3 的默认串联逻辑。
+6. `tools/test.py` 默认读取 Stage3 work_dir 下的 `latest.pth`。
+7. 可视化预测结果默认读取 `<stage3_work_dir>/eval/pos_predictions.pkl`。
+8. 可视化 GT 默认读取 `<maptracker_dir>/waymo_map_infos_val_gt_tracks.pkl`。
+9. 脚本不会检查 pkl 中的 ROI metadata 是否和 config 完全一致，运行前需要人工确认数据目录和 config 对应。

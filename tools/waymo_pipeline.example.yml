@@ -32,6 +32,7 @@ runtime:
   num_gpus: 4
   exp_tag: asym_roi
   dry_run: false
+  init_ckpt: null
 
 generated_configs:
   enabled: true

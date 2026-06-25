@@ -191,7 +191,13 @@ def build_config(raw: dict[str, Any], config_file: Path | None = None) -> Pipeli
     convert = {"frame_stride": 5, "num_points": 20, "num_workers": 8}
     convert.update(section(raw, "convert"))
 
-    runtime = {"gpus": "0", "num_gpus": None, "exp_tag": "asym_roi", "dry_run": False}
+    runtime = {
+        "gpus": "0",
+        "num_gpus": None,
+        "exp_tag": "asym_roi",
+        "dry_run": False,
+        "init_ckpt": None,
+    }
     runtime.update(section(raw, "runtime"))
 
     visualize = {"scene_ids": [], "per_frame_result": 1, "overwrite": 1, "draw_bev_range": True}
@@ -483,7 +489,12 @@ def required_paths(cfg: PipelineConfig, step: str) -> list[tuple[str, Path, str]
             ("file", d["maptracker_train_tracks"], "stage1 requires train GT tracks"),
             ("file", d["maptracker_val_tracks"], "stage1 requires val GT tracks"),
             ("file", active_stage_config(cfg, "1"), "stage1 requires stage1 config"),
-        ],
+        ]
+        + (
+            [("file", Path(str(cfg.runtime["init_ckpt"])), "stage1 init_ckpt must exist")]
+            if cfg.runtime.get("init_ckpt")
+            else []
+        ),
         "train_stage2": [
             ("file", d["stage1_checkpoint"], "stage2 requires stage1 checkpoint"),
             ("file", d["maptracker_train"], "stage2 requires packed train pkl"),
@@ -684,7 +695,10 @@ def cfg_override_dict(cfg: PipelineConfig, stage_num: str) -> dict[str, Any]:
         "match_config.pipeline.1.roi_range": tuple(roi_range),
         "match_config.pipeline.1.roi_size": tuple(roi_size),
     }
-    if stage_num == "2":
+    init_ckpt = cfg.runtime.get("init_ckpt")
+    if stage_num == "1" and init_ckpt:
+        overrides["load_from"] = str(init_ckpt)
+    elif stage_num == "2":
         overrides["load_from"] = str(d["stage1_checkpoint"])
     elif stage_num == "3":
         overrides["load_from"] = str(d["stage2_checkpoint"])
@@ -937,7 +951,10 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
             work_dir = {"1": d["stage1_work"], "2": d["stage2_work"], "3": d["stage3_work"]}[stage_num]
             port = {"1": "29511", "2": "29513", "3": "29514"}[stage_num]
             stage_options = list(options)
-            if stage_num == "2":
+            init_ckpt = cfg.runtime.get("init_ckpt")
+            if stage_num == "1" and init_ckpt:
+                stage_options.append(f"load_from={init_ckpt}")
+            elif stage_num == "2":
                 stage_options.append(f"load_from={d['stage1_checkpoint']}")
             elif stage_num == "3":
                 stage_options.append(f"load_from={d['stage2_checkpoint']}")

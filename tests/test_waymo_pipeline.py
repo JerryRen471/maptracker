@@ -73,6 +73,7 @@ def write_config(tmpdir, **overrides):
             "num_gpus": 1,
             "exp_tag": "unit",
             "dry_run": True,
+            "init_ckpt": "",
         },
         "generated_configs": {
             "enabled": True,
@@ -131,6 +132,7 @@ def write_config(tmpdir, **overrides):
               num_gpus: {base['runtime']['num_gpus']}
               exp_tag: {base['runtime']['exp_tag']}
               dry_run: {str(base['runtime']['dry_run']).lower()}
+              init_ckpt: "{base['runtime']['init_ckpt']}"
             generated_configs:
               enabled: {str(base['generated_configs']['enabled']).lower()}
               out_dir: "{base['generated_configs']['out_dir']}"
@@ -269,6 +271,60 @@ class WaymoPipelineTest(unittest.TestCase):
             self.assertIn(f"load_from={stage1_work}/latest.pth", command)
             self.assertNotIn("/MapTR/mmdetection3d", command)
             self.assertIn(":${PYTHONPATH:-}", command)
+
+    def test_stage1_uses_init_ckpt_when_provided(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            init_ckpt = tmpdir / "init_stage1.pth"
+            init_ckpt.write_bytes(b"")
+            cfg = write_config(
+                tmpdir,
+                runtime={"init_ckpt": str(init_ckpt)},
+                generated_configs={"enabled": False},
+            )
+            (tmpdir / "maptracker").mkdir()
+            (tmpdir / "maptracker" / "waymo_map_infos_train.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_train_gt_tracks.pkl").write_bytes(b"")
+            (tmpdir / "maptracker" / "waymo_map_infos_val_gt_tracks.pkl").write_bytes(b"")
+
+            result = subprocess.run(
+                [
+                    "python",
+                    str(SCRIPT),
+                    "--config",
+                    str(cfg),
+                    "--steps",
+                    "train_stage1",
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "ready")
+            command = payload["commands"][0]["command"]
+            self.assertIn(f"load_from={init_ckpt}", command)
+
+    def test_generated_overrides_use_stage1_init_ckpt_without_changing_stage2_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            init_ckpt = tmpdir / "init_stage1.pth"
+            cfg_path = write_config(tmpdir, runtime={"init_ckpt": str(init_ckpt)})
+
+            pipeline = load_pipeline_module()
+            cfg = pipeline.build_config(pipeline.load_config(cfg_path), config_file=cfg_path)
+
+            stage1_overrides = pipeline.cfg_override_dict(cfg, "1")
+            stage2_overrides = pipeline.cfg_override_dict(cfg, "2")
+
+            self.assertEqual(stage1_overrides["load_from"], str(init_ckpt))
+            self.assertEqual(stage2_overrides["load_from"], str(cfg.derived["stage1_checkpoint"]))
 
     def test_all_steps_treat_selected_upstream_outputs_as_available(self):
         with tempfile.TemporaryDirectory() as tmp:

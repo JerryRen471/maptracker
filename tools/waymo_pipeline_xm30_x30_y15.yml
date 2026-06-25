@@ -27,6 +27,7 @@ runtime:
   num_gpus: 4
   exp_tag: xm30_x30_y15
   dry_run: false
+  init_ckpt: null
 
 generated_configs:
   enabled: true
