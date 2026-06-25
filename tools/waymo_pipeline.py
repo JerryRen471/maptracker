@@ -194,7 +194,7 @@ def build_config(raw: dict[str, Any], config_file: Path | None = None) -> Pipeli
     runtime = {"gpus": "0", "num_gpus": None, "exp_tag": "asym_roi", "dry_run": False}
     runtime.update(section(raw, "runtime"))
 
-    visualize = {"scene_ids": [], "per_frame_result": 1, "overwrite": 1}
+    visualize = {"scene_ids": [], "per_frame_result": 1, "overwrite": 1, "draw_bev_range": True}
     visualize.update(section(raw, "visualize"))
     semantic_vis = {
         "enabled": True,
@@ -985,6 +985,8 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 cfg.visualize["per_frame_result"],
                 "--overwrite",
                 cfg.visualize["overwrite"],
+                "--draw_bev_range",
+                int(bool(cfg.visualize.get("draw_bev_range", True))),
                 *scene_args,
             ]
             if not generated_configs_enabled(cfg):
@@ -1003,6 +1005,8 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 cfg.visualize["per_frame_result"],
                 "--overwrite",
                 cfg.visualize["overwrite"],
+                "--draw_bev_range",
+                int(bool(cfg.visualize.get("draw_bev_range", True))),
                 *scene_args,
             ]
             if not generated_configs_enabled(cfg):
@@ -1032,6 +1036,8 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 semantic.get("device_id", 0),
                 "--score-dpi",
                 semantic.get("score_dpi", 140),
+                "--draw-bev-range",
+                int(bool(cfg.visualize.get("draw_bev_range", True))),
                 *scene_args,
             ]
             if semantic.get("max_frames") is not None:

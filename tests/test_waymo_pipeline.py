@@ -90,6 +90,7 @@ def write_config(tmpdir, **overrides):
             "scene_ids": [],
             "per_frame_result": 1,
             "overwrite": 1,
+            "draw_bev_range": True,
             "semantic": {},
         },
     }
@@ -144,6 +145,7 @@ def write_config(tmpdir, **overrides):
               scene_ids: []
               per_frame_result: {base['visualize']['per_frame_result']}
               overwrite: {base['visualize']['overwrite']}
+              draw_bev_range: {str(base['visualize']['draw_bev_range']).lower()}
               semantic: {base['visualize']['semantic']}
             """
         ).strip()
@@ -629,12 +631,15 @@ class WaymoPipelineTest(unittest.TestCase):
                 "visualize_gt",
                 "visualize_semantic",
             ])
+            self.assertIn("--draw_bev_range 1", payload["commands"][0]["command"])
+            self.assertIn("--draw_bev_range 1", payload["commands"][1]["command"])
             semantic_command = payload["commands"][2]["command"]
             self.assertIn("tools/check_seg.py", semantic_command)
             self.assertIn(f"--config {stage1_config}", semantic_command)
             self.assertIn(f"--checkpoint {stage1_work}/latest.pth", semantic_command)
             self.assertIn(f"--out-dir {stage3_work}/visualization/semantic", semantic_command)
             self.assertIn("--split val", semantic_command)
+            self.assertIn("--draw-bev-range 1", semantic_command)
             self.assertIn("--max-frames 5", semantic_command)
 
     def test_visualize_semantic_can_run_without_vector_predictions(self):

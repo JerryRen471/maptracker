@@ -52,6 +52,7 @@ visualize:
   scene_ids: []
   per_frame_result: 1
   overwrite: 1
+  draw_bev_range: true
   semantic:
     enabled: true
     stage: stage1

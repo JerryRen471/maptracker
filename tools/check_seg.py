@@ -49,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers-per-gpu", type=int, default=0, help="Dataloader workers")
     parser.add_argument("--device-id", type=int, default=0, help="CUDA device id inside CUDA_VISIBLE_DEVICES")
     parser.add_argument("--score-dpi", type=int, default=140, help="DPI for score heatmap figures")
+    parser.add_argument("--draw-bev-range", type=int, default=1, help="Draw the BEV ROI range border")
     parser.add_argument(
         "--no-score-heatmaps",
         action="store_true",
@@ -88,6 +89,29 @@ def colorize_label(label_map):
     return img
 
 
+def bev_border_box(width: int, height: int):
+    return (0, 0, max(0, width - 1), max(0, height - 1))
+
+
+def draw_bev_border(image, enabled: bool = True):
+    if not enabled:
+        return image
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(image)
+    width, height = image.size
+    draw.rectangle(bev_border_box(width, height), outline=(242, 201, 76), width=3)
+    return image
+
+
+def save_label_image(label_map, out_path: Path, draw_bev_range: bool) -> None:
+    from PIL import Image
+
+    image = Image.fromarray(colorize_label(label_map))
+    draw_bev_border(image, enabled=draw_bev_range)
+    image.save(out_path)
+
+
 def gt_onehot_to_label(gt_semantic):
     import numpy as np
 
@@ -98,14 +122,28 @@ def gt_onehot_to_label(gt_semantic):
     return label
 
 
-def save_score_heatmap(score_map, out_path: Path, title: str, dpi: int) -> None:
+def save_score_heatmap(score_map, out_path: Path, title: str, dpi: int, draw_bev_range: bool) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
 
     fig, ax = plt.subplots(figsize=(8, 4), dpi=dpi)
     im = ax.imshow(score_map, cmap="magma", vmin=0.0, vmax=1.0)
+    if draw_bev_range:
+        height, width = score_map.shape[:2]
+        ax.add_patch(
+            patches.Rectangle(
+                (-0.5, -0.5),
+                width,
+                height,
+                fill=False,
+                edgecolor="#f2c94c",
+                linewidth=2.0,
+                linestyle="--",
+            )
+        )
     ax.set_title(title, fontsize=8)
     ax.axis("off")
     fig.colorbar(im, ax=ax, fraction=0.025, pad=0.01)
@@ -250,8 +288,9 @@ def render(args: argparse.Namespace) -> None:
 
                 gt_path = frame_dir / "gt_semantic_mask.png"
                 pred_path = frame_dir / "pred_hard_thr_0.4.png"
-                Image.fromarray(colorize_label(gt_label)).save(gt_path)
-                Image.fromarray(colorize_label(pred_label)).save(pred_path)
+                draw_bev_range = bool(args.draw_bev_range)
+                save_label_image(gt_label, gt_path, draw_bev_range)
+                save_label_image(pred_label, pred_path, draw_bev_range)
 
                 panel_paths = [gt_path, pred_path]
                 score_stats = {}
@@ -264,6 +303,7 @@ def render(args: argparse.Namespace) -> None:
                             heatmap_path,
                             f"{scene} frame={frame_idx} {target_name} score",
                             args.score_dpi,
+                            draw_bev_range,
                         )
                         panel_paths.append(heatmap_path)
                         score_stats[f"{target_name}_score_max"] = float(score.max())

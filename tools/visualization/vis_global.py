@@ -87,6 +87,12 @@ def parse_args():
         help='Whether to use transparent background'
     )
     parser.add_argument(
+        '--draw_bev_range',
+        default=1,
+        type=int,
+        help='Whether to draw the BEV ROI range rectangle'
+    )
+    parser.add_argument(
         '--cfg-options',
         nargs='+',
         action=DictAction,
@@ -106,6 +112,42 @@ def scene_has_prediction_vectors(scene_name, pred_results):
         if vectors is not None and len(vectors) > 0:
             return True
     return False
+
+
+def bev_range_bounds(origin, roi_size):
+    x_min = float(origin[0])
+    y_min = float(origin[1])
+    x_max = x_min + float(roi_size[0])
+    y_max = y_min + float(roi_size[1])
+    return x_min, x_max, y_min, y_max
+
+
+def set_bev_range_args(args, origin, roi_size):
+    x_min, x_max, y_min, y_max = bev_range_bounds(origin, roi_size)
+    args.bev_x_min = x_min
+    args.bev_x_max = x_max
+    args.bev_y_min = y_min
+    args.bev_y_max = y_max
+
+
+def draw_bev_range(ax, args):
+    if not getattr(args, "draw_bev_range", 1):
+        return
+    if not all(hasattr(args, name) for name in ["bev_x_min", "bev_x_max", "bev_y_min", "bev_y_max"]):
+        return
+    x_min = args.bev_x_min
+    x_max = args.bev_x_max
+    y_min = args.bev_y_min
+    y_max = args.bev_y_max
+    ax.plot(
+        [x_min, x_max, x_max, x_min, x_min],
+        [y_min, y_min, y_max, y_max, y_min],
+        color="#f2c94c",
+        linewidth=2.5,
+        linestyle="--",
+        alpha=0.95,
+        zorder=20,
+    )
 
 def combine_images_with_labels(image_paths, labels, output_path, font_scale=0.5, font_color=(0, 0, 0)):
     # Load images
@@ -783,6 +825,7 @@ def plot_fig_merged_per_frame(num_frames, car_trajectory, x_min, x_max, y_min, y
         ax = fig.add_subplot(1, 1, 1)
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
+        draw_bev_range(ax, args)
         
         # setup the figure with car
         car_img = Image.open('resources/car-orange.png')
@@ -905,6 +948,7 @@ def plot_fig_merged(car_trajectory, x_min, x_max, y_min, y_max, pred_save_path, 
     ax = fig.add_subplot(1, 1, 1)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
+    draw_bev_range(ax, args)
     car_img = Image.open('resources/car-orange.png')
     
     faded_rate = np.linspace(0.2, 1, num=len(car_trajectory))
@@ -1007,6 +1051,7 @@ def plot_fig_unmerged_per_frame(num_frames, car_trajectory, x_min, x_max, y_min,
     ax = fig.add_subplot(1, 1, 1)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
+    draw_bev_range(ax, args)
     car_img = Image.open('resources/car-orange.png')
 
 
@@ -1066,6 +1111,7 @@ def plot_fig_unmerged(car_trajectory, x_min, x_max, y_min, y_max, pred_save_path
     ax = fig.add_subplot(1, 1, 1)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
+    draw_bev_range(ax, args)
     car_img = Image.open('resources/car-orange.png')
     
     # trace the path reversely, get the sub-sampled traj for visualizing the car 
@@ -1164,6 +1210,7 @@ def save_as_video(image_list, mp4_output_path, scale=None):
 
 
 def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, args=None):
+    set_bev_range_args(args, origin, roi_size)
     
 
     # get the item index of the scene
@@ -1280,6 +1327,7 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     return True
 
 def vis_gt_data(scene_name, args, dataset, gt_data, origin, roi_size):
+    set_bev_range_args(args, origin, roi_size)
 
     gt_info = gt_data[scene_name]
     gt_info_list = []

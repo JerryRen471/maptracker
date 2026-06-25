@@ -126,6 +126,7 @@ subset:
 ```yaml
 visualize:
   scene_ids: []
+  draw_bev_range: true
   semantic:
     enabled: true
     stage: stage1
@@ -135,6 +136,8 @@ visualize:
     device_id: 0
     score_heatmaps: true
 ```
+
+`draw_bev_range: true` 会在 vector/global 图和 BEV semantic 图上叠加 ROI/BEV 范围边框；如不需要边框，可设为 `false`。
 
 只看 BEV segmentation：
 

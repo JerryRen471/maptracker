@@ -46,6 +46,18 @@ class VisGlobalTest(unittest.TestCase):
             )
         )
 
+    def test_bev_range_bounds_use_origin_and_roi_size(self):
+        bounds = load_helper("bev_range_bounds")
+
+        self.assertEqual(
+            bounds(origin=[-15.0, -15.0], roi_size=[60.0, 30.0]),
+            (-15.0, 45.0, -15.0, 15.0),
+        )
+        self.assertEqual(
+            bounds(origin=[-30.0, -15.0], roi_size=[60.0, 30.0]),
+            (-30.0, 30.0, -15.0, 15.0),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
