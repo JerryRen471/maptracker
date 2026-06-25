@@ -236,6 +236,7 @@ def build_config(raw: dict[str, Any], config_file: Path | None = None) -> Pipeli
     generated_configs.update(section(raw, "generated_configs"))
     schedule = {
         "auto_from_data": True,
+        "batch_size": None,
         "num_epochs": None,
         "num_iters_per_epoch": None,
         "min_iters_per_epoch": 1,
@@ -364,6 +365,14 @@ def visualize_semantic_enabled(cfg: PipelineConfig) -> bool:
 def schedule_auto_from_data(cfg: PipelineConfig) -> bool:
     schedule = cfg.generated_configs.get("schedule") or {}
     return bool(generated_configs_enabled(cfg) and schedule.get("auto_from_data", True))
+
+
+def schedule_batch_size(cfg: PipelineConfig) -> int | None:
+    schedule = cfg.generated_configs.get("schedule") or {}
+    value = schedule.get("batch_size")
+    if value is None:
+        return None
+    return int(value)
 
 
 def active_stage_config(cfg: PipelineConfig, stage_num: str) -> Path:
@@ -695,6 +704,10 @@ def cfg_override_dict(cfg: PipelineConfig, stage_num: str) -> dict[str, Any]:
         "match_config.pipeline.1.roi_range": tuple(roi_range),
         "match_config.pipeline.1.roi_size": tuple(roi_size),
     }
+    batch_size = schedule_batch_size(cfg)
+    if batch_size is not None:
+        overrides["batch_size"] = batch_size
+        overrides["data.samples_per_gpu"] = batch_size
     init_ckpt = cfg.runtime.get("init_ckpt")
     if stage_num == "1" and init_ckpt:
         overrides["load_from"] = str(init_ckpt)
@@ -744,13 +757,15 @@ def schedule_override_dict(cfg: PipelineConfig, stage_cfg: Any) -> dict[str, Any
     sample_count = int(sample_count)
 
     num_gpus = int(cfg.runtime.get("num_gpus") or len(str(cfg.runtime["gpus"]).split(",")))
-    batch_size = int(
-        config_value(
-            stage_cfg,
-            "batch_size",
-            nested_config_value(stage_cfg, ["data", "samples_per_gpu"], 1),
+    batch_size = schedule_batch_size(cfg)
+    if batch_size is None:
+        batch_size = int(
+            config_value(
+                stage_cfg,
+                "batch_size",
+                nested_config_value(stage_cfg, ["data", "samples_per_gpu"], 1),
+            )
         )
-    )
     global_batch_size = max(1, num_gpus * batch_size)
     min_iters = int(schedule.get("min_iters_per_epoch", 1))
     configured_iters = schedule.get("num_iters_per_epoch")

@@ -85,6 +85,14 @@ lr_config.warmup_iters
 
 对 subset 训练，可以用 `generated_configs.schedule.num_epochs` 增加过拟合轮数。例如 6 个 scene 共 240 帧、4 GPU、Stage1 batch_size=1、num_epochs=20 时，Stage1 会生成约 `20 * (240 // 4) = 1200` iter，而不是完整 Waymo 配置里的 75624 iter。
 
+如需通过 pipeline YAML 改 batch size，设置 `generated_configs.schedule.batch_size`。这里的 batch size 是每张 GPU 的 `samples_per_gpu`；非空时会同时覆盖生成配置里的 `batch_size` 和 `data.samples_per_gpu`，并用同一个值重算 `num_iters_per_epoch`。
+
+```yaml
+generated_configs:
+  schedule:
+    batch_size: 2
+```
+
 如果需要给 Stage1 指定初始化 checkpoint，在 `runtime.init_ckpt` 中填写路径即可。该字段只影响 Stage1，会被转换为 `load_from=<init_ckpt>`；Stage2 仍默认加载 Stage1 work_dir 下的 `latest.pth`，Stage3 仍默认加载 Stage2 work_dir 下的 `latest.pth`。
 
 ```yaml
@@ -99,6 +107,7 @@ generated_configs:
   enabled: true
   schedule:
     auto_from_data: true
+    batch_size: null
     num_epochs: 20
 
 subset:

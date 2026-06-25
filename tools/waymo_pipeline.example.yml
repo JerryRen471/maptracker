@@ -40,6 +40,7 @@ generated_configs:
   overwrite: true
   schedule:
     auto_from_data: true
+    batch_size: null
     num_epochs: null
     num_iters_per_epoch: null
     min_iters_per_epoch: 1

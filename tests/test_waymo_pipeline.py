@@ -508,6 +508,36 @@ class WaymoPipelineTest(unittest.TestCase):
             self.assertEqual(overrides["runner.max_iters"], 800)
             self.assertEqual(overrides["lr_config.warmup_iters"], 80)
 
+    def test_generated_schedule_allows_batch_size_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            subset_dir = tmpdir / "maptracker_subset"
+            cfg_path = write_config(
+                tmpdir,
+                runtime={"num_gpus": 4},
+                generated_configs={"schedule": {"batch_size": 2, "num_epochs": 10}},
+                subset={"enabled": True, "output_dir": str(subset_dir)},
+            )
+            write_maptracker_payload(subset_dir / "waymo_map_infos_train.pkl", 240)
+
+            pipeline = load_pipeline_module()
+            cfg = pipeline.build_config(pipeline.load_config(cfg_path), config_file=cfg_path)
+            stage_cfg = {
+                "batch_size": 1,
+                "num_epochs": 3,
+                "num_epochs_interval": 1,
+                "runner": {"type": "MyRunnerWrapper", "max_iters": 75624},
+            }
+
+            config_overrides = pipeline.cfg_override_dict(cfg, "1")
+            schedule_overrides = pipeline.schedule_override_dict(cfg, stage_cfg)
+
+            self.assertEqual(config_overrides["batch_size"], 2)
+            self.assertEqual(config_overrides["data.samples_per_gpu"], 2)
+            self.assertEqual(schedule_overrides["batch_size"], 2)
+            self.assertEqual(schedule_overrides["num_iters_per_epoch"], 30)
+            self.assertEqual(schedule_overrides["total_iters"], 300)
+
     def test_subset_step_generates_subset_command_and_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = pathlib.Path(tmp)
