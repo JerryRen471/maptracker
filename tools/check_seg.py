@@ -11,6 +11,10 @@ import sys
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 TARGETS = {
     "ped_crossing": 0,
     "divider": 1,
@@ -52,7 +56,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def import_plugin(cfg) -> None:
-    sys.path.append(os.path.abspath("."))
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
     if getattr(cfg, "plugin", False):
         plugin_dirs = cfg.plugin_dir if isinstance(cfg.plugin_dir, list) else [cfg.plugin_dir]
         for plugin_dir in plugin_dirs:
