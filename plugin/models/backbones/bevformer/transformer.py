@@ -85,6 +85,7 @@ class PerceptionTransformer(BaseModule):
             bev_w,
             bev_pos=None,
             prop_bev=None,
+            prop_bev_mask=None,
             prev_bev=None,
             warped_history_bev=None,
             **kwargs):
@@ -125,7 +126,19 @@ class PerceptionTransformer(BaseModule):
         # Fuse the propagated bev features from the prev step
         if prop_bev is not None:
             prop_bev = rearrange(prop_bev, 'b c h w -> (h w) b c')
-            valid_mask = (prop_bev.sum(-1) > 0).to(bev_queries.dtype)[..., None]
+            if prop_bev_mask is not None:
+                if prop_bev_mask.dim() == 4 and prop_bev_mask.shape[1] == 1:
+                    prop_bev_mask = prop_bev_mask[:, 0]
+                if prop_bev_mask.dim() != 3:
+                    raise ValueError(
+                        'prop_bev_mask must have shape [B, H, W] or [B, 1, H, W], '
+                        f'got {tuple(prop_bev_mask.shape)}')
+                valid_mask = rearrange(
+                    prop_bev_mask.to(device=prop_bev.device),
+                    'b h w -> (h w) b')
+                valid_mask = (valid_mask > 0).to(bev_queries.dtype)[..., None]
+            else:
+                valid_mask = (prop_bev.sum(-1) > 0).to(bev_queries.dtype)[..., None]
             bev_queries = bev_queries * (1 - valid_mask) + prop_bev * valid_mask 
         
         bev_embed = self.encoder(

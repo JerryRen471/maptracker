@@ -17,6 +17,7 @@ from scipy.spatial.transform import Rotation as R
 
 from .vector_memory import VectorInstanceMemory
 from plugin.roi import resolve_roi
+from plugin.temporal_visibility import build_temporal_supervision_mask
 
 
 @MAPPERS.register_module()
@@ -447,6 +448,7 @@ class MapTracker(BaseMapper):
         # History records for bev features
         history_bev_feats = []
         history_img_metas = []
+        history_visible_masks = []
         
         gt_semantic = torch.flip(semantic_mask, [2,])
 
@@ -458,8 +460,11 @@ class MapTracker(BaseMapper):
             all_history_curr2prev, all_history_prev2curr, all_history_coord =  \
                     self.process_history_info(all_img_metas_prev[t], history_img_metas)
 
-            _bev_feats, mlvl_feats = self.backbone(all_img_prev[t], all_img_metas_prev[t], t, history_bev_feats, 
-                        history_img_metas, all_history_coord, points=None, 
+            _bev_feats, mlvl_feats, warped_history_visible_union = \
+                    self.backbone(all_img_prev[t], all_img_metas_prev[t], t, history_bev_feats,
+                        history_img_metas, all_history_coord, points=None,
+                        history_visible_masks=history_visible_masks,
+                        return_history_visibility=True,
                         img_backbone_gradient=img_backbone_gradient)
 
             # Neck for prev
@@ -498,16 +503,20 @@ class MapTracker(BaseMapper):
             # Compute the semantic segmentation loss
             visible_mask_prev = self.get_bev_visibility_mask(
                 img_metas_prev, bev_feats.device)
+            supervision_mask_prev = build_temporal_supervision_mask(
+                visible_mask_prev, warped_history_visible_union)
             seg_preds, seg_feats, seg_loss, seg_dice_loss = self.seg_decoder(bev_feats, gts_semantic_prev,
-                    all_history_coord, visible_mask=visible_mask_prev,
+                    all_history_coord, visible_mask=supervision_mask_prev,
                     return_loss=True)
 
             # Save the history 
             history_bev_feats.append(bev_feats)
             history_img_metas.append(all_img_metas_prev[t])
+            history_visible_masks.append(visible_mask_prev.detach())
             if len(history_bev_feats) > self.history_steps:
                 history_bev_feats.pop(0)
                 history_img_metas.pop(0)
+                history_visible_masks.pop(0)
             
             if not self.skip_vector_head:
                 # Prepare the two-frame instance matching info
@@ -557,8 +566,11 @@ class MapTracker(BaseMapper):
 
         all_history_curr2prev, all_history_prev2curr, all_history_coord = self.process_history_info(img_metas, history_img_metas)
 
-        _bev_feats, mlvl_feats = self.backbone(img, img_metas, num_prev_frames, history_bev_feats, history_img_metas, all_history_coord,
-                    points=None, img_backbone_gradient=img_backbone_gradient)
+        _bev_feats, mlvl_feats, warped_history_visible_union = \
+                self.backbone(img, img_metas, num_prev_frames, history_bev_feats, history_img_metas, all_history_coord,
+                    points=None, history_visible_masks=history_visible_masks,
+                    return_history_visibility=True,
+                    img_backbone_gradient=img_backbone_gradient)
         # Neck for curr
         bev_feats = self.neck(_bev_feats)
 
@@ -583,8 +595,10 @@ class MapTracker(BaseMapper):
             ########################################################
 
         visible_mask = self.get_bev_visibility_mask(img_metas, bev_feats.device)
+        supervision_mask = build_temporal_supervision_mask(
+            visible_mask, warped_history_visible_union)
         seg_preds, seg_feats, seg_loss, seg_dice_loss = self.seg_decoder(bev_feats, gt_semantic, 
-                all_history_coord, visible_mask=visible_mask, return_loss=True)
+                all_history_coord, visible_mask=supervision_mask, return_loss=True)
         
         if not self.skip_vector_head:
             memory_bank = self.memory_bank if _use_memory else None
