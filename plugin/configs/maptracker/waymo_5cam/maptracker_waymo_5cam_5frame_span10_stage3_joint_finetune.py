@@ -20,7 +20,7 @@ num_cams = 5
 num_gpus = 8
 batch_size = 2
 num_iters_per_epoch = 25210 // (num_gpus * batch_size)
-num_epochs = 6
+num_epochs = 20
 num_epochs_interval = num_epochs // 5
 total_iters = num_epochs * num_iters_per_epoch
 num_queries = 100
@@ -316,6 +316,9 @@ test_pipeline = [
         'ego2global_rotation', 'img_shape', 'scene_name'))
 ]
 
+# validation subsampling: keep every N-th frame (~14539/N val samples)
+val_interval = 10
+
 # configs for evaluation code
 # DO NOT CHANGE
 eval_config = dict(
@@ -338,7 +341,7 @@ eval_config = dict(
         dict(type='Collect3D', keys=['vectors',], meta_keys=['token', 'ego2img', 'sample_idx', 'ego2global_translation',
         'ego2global_rotation', 'img_shape', 'scene_name'])
     ],
-    interval=1,
+    interval=val_interval,
 )
 
 
@@ -402,7 +405,7 @@ data = dict(
         eval_config=eval_config,
         test_mode=True,
         seq_split_num=1,
-        interval=1,
+        interval=val_interval,
     ),
     test=dict(
         type='WaymoMapDataset',
@@ -415,7 +418,7 @@ data = dict(
         eval_config=eval_config,
         test_mode=True,
         seq_split_num=1,
-        interval=1,
+        interval=val_interval,
     ),
     shuffler_sampler=dict(type='DistributedGroupSampler'),
     nonshuffler_sampler=dict(type='DistributedSampler')

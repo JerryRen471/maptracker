@@ -1,0 +1,63 @@
+paths:
+  conda_home: /root/miniconda3
+  waymo_env: waymo_pack
+  train_env: maptracker
+  waymo_train_dir: /data8012/waymo/training
+  waymo_val_dir: /data8012/waymo/validation
+  processed_dir: /data/waymo_processed_xm15_x45_y15
+  maptracker_dir: /data/waymo_maptracker_xm15_x45_y15
+  work_root: /data/maptr_workspace/work_dirs
+  reuse_images_from: ""
+  mmdet3d_dir: null
+  extra_pythonpath: []
+
+roi:
+  x_min: -15
+  y_min: -15
+  x_max: 45
+  y_max: 15
+
+convert:
+  frame_stride: 5
+  num_points: 20
+  num_workers: 8
+
+runtime:
+  gpus: "0,1,2,3,4,5,6,7"
+  num_gpus: 8
+  exp_tag: xm15_x45_y15_pretrain_init
+  dry_run: false
+  init_ckpt: /data/maptr_workspace/work_dirs/maptracker_waymo_5cam_5frame_span10_stage2_warmup_xm15_x45_y15/latest.pth
+
+generated_configs:
+  enabled: true
+  out_dir: null
+  overwrite: true
+  schedule:
+    auto_from_data: true
+    num_epochs: 20
+    batch_size: 3
+    num_iters_per_epoch: null
+    min_iters_per_epoch: 1
+    update_evaluation: true
+    update_checkpoint: true
+    adjust_warmup: true
+    warmup_ratio: 0.1
+
+subset:
+  enabled: false
+  output_dir: /data/waymo_maptracker_xm15_x45_y15_overfit1
+  num_scenes: 1
+  scenes: []
+
+visualize:
+  scene_ids: []
+    # - segment-10017090168044687777_6380_000_6400_000_with_camera_labels
+  per_frame_result: 1
+  draw_bev_range: false
+  overwrite: 1
+  semantic:
+      enabled: true
+      stage: stage1
+      split: val
+      max_frames: 10

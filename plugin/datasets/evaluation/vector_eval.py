@@ -20,7 +20,7 @@ from plugin.roi import roi_cache_tag
 
 INTERP_NUM = 200 # number of points to interpolate during evaluation
 THRESHOLDS = [0.5, 1.0, 1.5] # AP thresholds
-N_WORKERS = 2 # num workers to parallel
+N_WORKERS = 32 # num workers to parallel (machine has 64 cores; was 2, which made inline eval during training exceed the 30-min NCCL timeout)
 SAMPLE_DIST = 0.15
 
 

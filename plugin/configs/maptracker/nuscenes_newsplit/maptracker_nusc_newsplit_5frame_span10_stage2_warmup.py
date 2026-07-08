@@ -17,8 +17,8 @@ img_h = 480
 img_w = 800
 img_size = (img_h, img_w)
 
-num_gpus = 8
-batch_size = 8
+num_gpus = 4
+batch_size = 10
 num_iters_per_epoch = 27846 // (num_gpus * batch_size)
 num_epochs = 4
 num_epochs_interval = num_epochs
@@ -369,7 +369,7 @@ match_config = dict(
 # dataset configs
 data = dict(
     samples_per_gpu=batch_size,
-    workers_per_gpu=10,
+    workers_per_gpu=4,
     train=dict(
         type='NuscDataset',
         data_root='./datasets/nuscenes',

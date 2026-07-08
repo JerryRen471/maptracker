@@ -477,6 +477,38 @@ class WaymoPipelineTest(unittest.TestCase):
             self.assertEqual(overrides["checkpoint_config.interval"], 60)
             self.assertEqual(overrides["lr_config.warmup_iters"], 18)
 
+    def test_generated_schedule_disables_mid_training_eval_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = pathlib.Path(tmp)
+            subset_dir = tmpdir / "maptracker_subset"
+            cfg_path = write_config(
+                tmpdir,
+                runtime={"num_gpus": 4},
+                generated_configs={"schedule": {"update_evaluation": False}},
+                subset={"enabled": True, "output_dir": str(subset_dir)},
+            )
+            write_maptracker_payload(subset_dir / "waymo_map_infos_train.pkl", 240)
+
+            pipeline = load_pipeline_module()
+            cfg = pipeline.build_config(pipeline.load_config(cfg_path), config_file=cfg_path)
+            stage_cfg = {
+                "num_gpus": 4,
+                "batch_size": 1,
+                "num_epochs": 3,
+                "num_epochs_interval": 1,
+                "total_iters": 75624,
+                "runner": {"type": "MyRunnerWrapper", "max_iters": 75624},
+                "evaluation": {"interval": 25208},
+                "checkpoint_config": {"interval": 25208},
+                "lr_config": {"warmup_iters": 500},
+            }
+
+            overrides = pipeline.schedule_override_dict(cfg, stage_cfg)
+
+            self.assertEqual(overrides["total_iters"], 180)
+            self.assertEqual(overrides["checkpoint_config.interval"], 60)
+            self.assertEqual(overrides["evaluation.interval"], 181)
+
     def test_generated_schedule_allows_num_epochs_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = pathlib.Path(tmp)

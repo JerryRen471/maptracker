@@ -8,21 +8,20 @@ plugin = True
 
 # plugin code dir
 plugin_dir = 'plugin/'
-[]
 # img configs
 img_norm_cfg = dict(
     mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
 
-img_h = 480
-img_w = 800
+img_h = 608
+img_w = 608
 img_size = (img_h, img_w)
-num_cams = 6
+num_cams = 5
 
 num_gpus = 4
-batch_size = 3
-num_iters_per_epoch = 27846 // (num_gpus * batch_size)
-num_epochs = 18
-num_epochs_interval = num_epochs // 6
+batch_size = 1
+num_iters_per_epoch = 25210 // (num_gpus * batch_size)
+num_epochs = 3
+num_epochs_interval = 1
 total_iters = num_epochs * num_iters_per_epoch
 num_queries = 100
 
@@ -35,9 +34,9 @@ cat2id = {
 num_class = max(list(cat2id.values())) + 1
 
 # bev configs
-roi_size = (60, 30) # bev range, 60m in x-axis, 30m in y-axis
-bev_h = 50
-bev_w = 100
+roi_size = (30, 60) # bev range, 30m in x-axis (Waymo forward), 60m in y-axis (lateral)
+bev_h = 100
+bev_w = 50
 pc_range = [-roi_size[0]/2, -roi_size[1]/2, -3, roi_size[0]/2, roi_size[1]/2, 5]
 
 # vectorize params
@@ -47,7 +46,7 @@ sample_num = -1
 simplify = True
 
 # rasterize params (for temporal matching use)
-canvas_size = (200, 100) # bev feature size
+canvas_size = (100, 200) # bev feature size for rasterization
 thickness = 3 # thickness of rasterized polylines
 
 # meta info for submission pkl
@@ -81,7 +80,6 @@ model = dict(
     track_fp_aug=False,
     use_memory=False,
     mem_len=4,
-    mem_warmup_iters=500,
     backbone_cfg=dict(
         type='BEVFormerBackbone',
         roi_size=roi_size,
@@ -116,6 +114,7 @@ model = dict(
         transformer=dict(
             type='PerceptionTransformer',
             embed_dims=bev_embed_dims,
+            num_cams=num_cams,
             encoder=dict(
                 type='BEVFormerEncoder',
                 num_layers=2,
@@ -136,11 +135,13 @@ model = dict(
                                 embed_dims=bev_embed_dims,
                                 num_points=8,
                                 num_levels=num_feat_levels),
-                            embed_dims=bev_embed_dims),
+                            embed_dims=bev_embed_dims,
+                            num_cams=num_cams,
+                        ),
                     ],
                     feedforward_channels=bev_embed_dims*2,
                     ffn_dropout=0.1,
-                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm', 
+                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
                                      'ffn', 'norm')
                 )
             ),
@@ -211,7 +212,7 @@ model = dict(
                         feedforward_channels=embed_dims*2,
                         num_fcs=2,
                         ffn_drop=0.1,
-                        act_cfg=dict(type='ReLU', inplace=True),        
+                        act_cfg=dict(type='ReLU', inplace=True),
                     ),
                     feedforward_channels=embed_dims*2,
                     ffn_dropout=0.1,
@@ -272,7 +273,7 @@ train_pipeline = [
         permute=permute,
     ),
     dict(
-        type='RasterizeMap',   
+        type='RasterizeMap',
         roi_size=roi_size,
         coords_dim=coords_dim,
         canvas_size=canvas_size,
@@ -303,7 +304,7 @@ test_pipeline = [
     dict(type='Normalize3D', **img_norm_cfg),
     dict(type='PadMultiViewImages', size_divisor=32),
     dict(type='FormatBundleMap'),
-    dict(type='Collect3D', keys=['img'], meta_keys=(
+    dict(type='Collect3D', keys=['img',], meta_keys=(
         'token', 'ego2img', 'sample_idx', 'ego2global_translation',
         'ego2global_rotation', 'img_shape', 'scene_name'))
 ]
@@ -311,9 +312,8 @@ test_pipeline = [
 # configs for evaluation code
 # DO NOT CHANGE
 eval_config = dict(
-    type='NuscDataset',
-    data_root='./datasets/nuscenes',
-    ann_file='./datasets/nuscenes/nuscenes_map_infos_val_newsplit.pkl',
+    type='WaymoMapDataset',
+    ann_file='/data/waymo_maptracker/waymo_map_infos_val.pkl',
     meta=meta,
     roi_size=roi_size,
     cat2id=cat2id,
@@ -326,12 +326,12 @@ eval_config = dict(
             roi_size=roi_size
         ),
         dict(
-            type='RasterizeMap',   
+            type='RasterizeMap',
             roi_size=roi_size,
             coords_dim=coords_dim,
             canvas_size=canvas_size,
             thickness=thickness,
-            semantic_mask=True,
+            semantic_mask=True
         ),
         dict(type='FormatBundleMap'),
         dict(type='Collect3D', keys=['vectors', 'semantic_mask'], meta_keys=['token', 'ego2img', 'sample_idx', 'ego2global_translation',
@@ -342,9 +342,8 @@ eval_config = dict(
 
 
 match_config = dict(
-    type='NuscDataset',
-    data_root='./datasets/nuscenes',
-    ann_file='./datasets/nuscenes/nuscenes_map_infos_val_newsplit.pkl',
+    type='WaymoMapDataset',
+    ann_file='/data/waymo_maptracker/waymo_map_infos_val.pkl',
     meta=meta,
     roi_size=roi_size,
     cat2id=cat2id,
@@ -358,16 +357,15 @@ match_config = dict(
             sample_num=num_points,
         ),
         dict(
-            type='RasterizeMap',   
+            type='RasterizeMap',
             roi_size=roi_size,
             coords_dim=coords_dim,
             canvas_size=canvas_size,
             thickness=thickness,
         ),
         dict(type='FormatBundleMap'),
-        dict(type='Collect3D', keys=['vectors', 'semantic_mask'], meta_keys=['token', 'ego2img', 'ego2cam', 'sample_idx', 'ego2global_translation',
-        'ego2global_rotation', 'img_shape', 'scene_name', 'img_filenames', 'cam_intrinsics', 'cam_extrinsics', 'lidar2ego_translation', 
-        'lidar2ego_rotation'])
+        dict(type='Collect3D', keys=['vectors', 'semantic_mask'], meta_keys=['token', 'ego2img', 'sample_idx', 'ego2global_translation',
+        'ego2global_rotation', 'img_shape', 'scene_name'])
     ],
     interval=1,
 )
@@ -377,9 +375,8 @@ data = dict(
     samples_per_gpu=batch_size,
     workers_per_gpu=8,
     train=dict(
-        type='NuscDataset',
-        data_root='./datasets/nuscenes',
-        ann_file='./datasets/nuscenes/nuscenes_map_infos_train_newsplit.pkl',
+        type='WaymoMapDataset',
+        ann_file='/data/waymo_maptracker/waymo_map_infos_train.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
@@ -387,12 +384,11 @@ data = dict(
         seq_split_num=-2,
         matching=True,
         multi_frame=5,
-        sampling_span=10,
+        interval=1,
     ),
     val=dict(
-        type='NuscDataset',
-        data_root='./datasets/nuscenes',
-        ann_file='./datasets/nuscenes/nuscenes_map_infos_val_newsplit.pkl',
+        type='WaymoMapDataset',
+        ann_file='/data/waymo_maptracker/waymo_map_infos_val.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
@@ -400,12 +396,12 @@ data = dict(
         eval_config=eval_config,
         test_mode=True,
         seq_split_num=1,
+        interval=1,
         eval_semantic=True,
     ),
     test=dict(
-        type='NuscDataset',
-        data_root='./datasets/nuscenes',
-        ann_file='./datasets/nuscenes/nuscenes_map_infos_val_newsplit.pkl',
+        type='WaymoMapDataset',
+        ann_file='/data/waymo_maptracker/waymo_map_infos_val.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
@@ -413,6 +409,7 @@ data = dict(
         eval_config=eval_config,
         test_mode=True,
         seq_split_num=1,
+        interval=1,
         eval_semantic=True,
     ),
     shuffler_sampler=dict(type='DistributedGroupSampler'),

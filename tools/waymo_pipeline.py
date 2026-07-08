@@ -713,6 +713,9 @@ def cfg_override_dict(cfg: PipelineConfig, stage_num: str) -> dict[str, Any]:
         overrides["load_from"] = str(init_ckpt)
     elif stage_num == "2":
         overrides["load_from"] = str(d["stage1_checkpoint"])
+        # Avoid SyncBN collective all_gather timeouts in long warmup runs.
+        # SyncBN is enabled in some base configs; disable it for stage2 by default.
+        overrides["SyncBN"] = False
     elif stage_num == "3":
         overrides["load_from"] = str(d["stage2_checkpoint"])
     return overrides
@@ -788,10 +791,15 @@ def schedule_override_dict(cfg: PipelineConfig, stage_cfg: Any) -> dict[str, Any
         "total_iters": total_iters,
         "runner.max_iters": total_iters,
     }
-    if schedule.get("update_evaluation", True):
-        overrides["evaluation.interval"] = interval
     if schedule.get("update_checkpoint", True):
         overrides["checkpoint_config.interval"] = interval
+
+    if schedule.get("update_evaluation", False):
+        overrides["evaluation.interval"] = interval
+    else:
+        # Skip mid-training validation by default. Waymo vector mAP on rank 0
+        # can take 30+ minutes and stall DDP; use the pipeline test step instead.
+        overrides["evaluation.interval"] = total_iters + 1
 
     if schedule.get("adjust_warmup", True):
         warmup_iters = nested_config_value(stage_cfg, ["lr_config", "warmup_iters"], None)

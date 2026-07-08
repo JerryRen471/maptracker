@@ -2,9 +2,9 @@
 set -euo pipefail
 
 WAYMO_DATA_DIR="${WAYMO_DATA_DIR:-/data/waymo}"
-PROCESSED_DIR="${PROCESSED_DIR:-/data/waymo_processed_x0_x45_y15}"
-MAPTRACKER_DIR="${MAPTRACKER_DIR:-/data/waymo_maptracker_x0_x45_y15}"
-OVERFIT_DIR="${OVERFIT_DIR:-/data/waymo_maptracker_x0_x45_y15_overfit6}"
+PROCESSED_DIR="${PROCESSED_DIR:-/data/waymo_processed_x0_x60_y15}"
+MAPTRACKER_DIR="${MAPTRACKER_DIR:-/data/waymo_maptracker_x0_x60_y15}"
+OVERFIT_DIR="${OVERFIT_DIR:-/data/waymo_maptracker_x0_x60_y15_overfit6}"
 CONFIG="${CONFIG:-subset/debug_overfit6_stage1_front_roi.py}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 LIMIT="${LIMIT:-0}"
@@ -21,7 +21,7 @@ CONVERT_ARGS=(
     --out-dir "${PROCESSED_DIR}"
     --x-min 0
     --y-min -15
-    --x-max 45
+    --x-max 60
     --y-max 15
     --num-workers "${NUM_WORKERS}"
     --frame-stride "${FRAME_STRIDE}"
@@ -46,7 +46,7 @@ from pathlib import Path
 import numpy as np
 
 processed_dir = Path(os.environ["PROCESSED_DIR"])
-expected_roi = (0.0, -15.0, 45.0, 15.0)
+expected_roi = (0.0, -15.0, 60.0, 15.0)
 
 for split in ("train", "val"):
     with open(processed_dir / f"{split}_infos.pkl", "rb") as f:
@@ -93,7 +93,7 @@ for split in ("train", "val"):
     assert os.path.isfile(track_file), track_file
     with open(ann_file, "rb") as f:
         data = pickle.load(f)
-    assert tuple(data["metadata"]["roi_range"]) == (0, -15, 45, 15)
+    assert tuple(data["metadata"]["roi_range"]) == (0, -15, 60, 15)
     assert data["samples"], split
     with open(track_file, "rb") as f:
         tracks = pickle.load(f)
