@@ -151,6 +151,29 @@ def save_visibility_mask(visible_mask, out_path, draw_bev_range: bool) -> None:
     out_path.write_bytes(png)
 
 
+def extract_frame_meta(result0, batch_data):
+    def unwrap_first_dict(value):
+        if isinstance(value, dict):
+            return value
+        if hasattr(value, "data"):
+            return unwrap_first_dict(value.data)
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                found = unwrap_first_dict(item)
+                if found is not None:
+                    return found
+        return None
+
+    meta = result0.get("meta") if isinstance(result0, dict) else None
+    if meta is not None:
+        return meta
+
+    meta = unwrap_first_dict(batch_data.get("img_metas"))
+    if meta is None:
+        raise KeyError("meta")
+    return meta
+
+
 def gt_onehot_to_label(gt_semantic):
     import numpy as np
 
@@ -332,8 +355,9 @@ def render(args: argparse.Namespace) -> None:
                 save_label_image(pred_label, pred_path, draw_bev_range)
 
                 panel_paths = [gt_path, pred_path]
+                frame_meta = extract_frame_meta(result0, data)
                 visible_mask = model.module.get_bev_visibility_mask(
-                    [result0["meta"]],
+                    [frame_meta],
                     next(model.module.parameters()).device,
                 )[0].detach().cpu().numpy()
                 visibility_path = frame_dir / "visibility_mask.png"

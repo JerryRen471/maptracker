@@ -55,6 +55,29 @@ class CheckSegTest(unittest.TestCase):
             self.assertEqual(bit_depth, 8)
             self.assertEqual(color_type, 0)
 
+    def test_extract_frame_meta_prefers_result_meta(self):
+        extract_frame_meta = load_helper("extract_frame_meta")
+
+        result_meta = {"token": "from-result"}
+        batch_meta = {"token": "from-batch"}
+
+        self.assertIs(
+            extract_frame_meta({"meta": result_meta}, {"img_metas": batch_meta}),
+            result_meta,
+        )
+
+    def test_extract_frame_meta_falls_back_to_batch_img_metas(self):
+        extract_frame_meta = load_helper("extract_frame_meta")
+
+        class Container:
+            def __init__(self, data):
+                self.data = data
+
+        batch_meta = {"token": "from-batch"}
+        batch_data = {"img_metas": [Container([[batch_meta]])]}
+
+        self.assertIs(extract_frame_meta({}, batch_data), batch_meta)
+
 
 if __name__ == "__main__":
     unittest.main()
