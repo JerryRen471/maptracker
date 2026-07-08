@@ -30,7 +30,12 @@ PALETTE = {
 
 
 def parse_args() -> argparse.Namespace:
-    from mmcv import DictAction
+    try:
+        from mmcv import DictAction
+    except ModuleNotFoundError:
+        class DictAction(argparse.Action):
+            def __call__(self, parser, namespace, values, option_string=None):
+                parser.error("--cfg-options requires mmcv to be installed")
 
     parser = argparse.ArgumentParser(
         description="Render BEV semantic GT, predicted masks, and per-class score heatmaps."
@@ -110,6 +115,40 @@ def save_label_image(label_map, out_path: Path, draw_bev_range: bool) -> None:
     image = Image.fromarray(colorize_label(label_map))
     draw_bev_border(image, enabled=draw_bev_range)
     image.save(out_path)
+
+
+def save_visibility_mask(visible_mask, out_path, draw_bev_range: bool) -> None:
+    import binascii
+    import struct
+    import zlib
+
+    rows = [[255 if float(value) > 0.0 else 0 for value in row] for row in visible_mask]
+    height = len(rows)
+    width = len(rows[0]) if height else 0
+    if draw_bev_range and width > 0 and height > 0:
+        for x in range(width):
+            rows[0][x] = 255
+            rows[height - 1][x] = 255
+        for y in range(height):
+            rows[y][0] = 255
+            rows[y][width - 1] = 255
+
+    def chunk(chunk_type, data):
+        payload = chunk_type + data
+        return (
+            struct.pack(">I", len(data))
+            + payload
+            + struct.pack(">I", binascii.crc32(payload) & 0xFFFFFFFF)
+        )
+
+    raw = b"".join(bytes([0]) + bytes(row) for row in rows)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+    out_path.write_bytes(png)
 
 
 def gt_onehot_to_label(gt_semantic):
@@ -293,6 +332,14 @@ def render(args: argparse.Namespace) -> None:
                 save_label_image(pred_label, pred_path, draw_bev_range)
 
                 panel_paths = [gt_path, pred_path]
+                visible_mask = model.module.get_bev_visibility_mask(
+                    [result0["meta"]],
+                    next(model.module.parameters()).device,
+                )[0].detach().cpu().numpy()
+                visibility_path = frame_dir / "visibility_mask.png"
+                save_visibility_mask(visible_mask, visibility_path, draw_bev_range)
+                panel_paths.append(visibility_path)
+
                 score_stats = {}
                 if not args.no_score_heatmaps:
                     for target_name, target_idx in TARGETS.items():
