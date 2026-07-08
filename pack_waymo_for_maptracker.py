@@ -6,7 +6,8 @@ pack_waymo_for_maptracker.py
 
 关键转换:
   1. dict(infos=[...])          → dict(samples=[...], id2map={})
-  2. cams[name].sensor2ego_*    → cams[name].extrinsics (4x4 ego2cam, 求逆得到)
+  2. cams[name].sensor2ego_*    → cams[name].extrinsics (4x4 ego2cam,
+                                  ego → pinhole camera)
   3. label 重映射               v3 {0:divider, 1:boundary, 2:ped_crossing}
                               → MT {0:ped_crossing, 1:divider, 2:boundary}
   4. 新增 prev 字段             每段第一帧 prev=-1,其他帧 prev=上一帧 token
@@ -37,13 +38,23 @@ V3_TO_MT_LABEL = {v3_idx: MT_CAT2ID[name]
                   for v3_idx, name in V3_LABEL_TO_NAME.items()}
 # Resulting map: {0: 1, 1: 2, 2: 0}
 
+# Waymo camera sensor coordinates use x-forward, y-left, z-up. The pinhole
+# projection used by MapTracker/BEVFormer expects x-right, y-down, z-forward.
+WAYMO_CAM_TO_PINHOLE = np.array([
+    [0.0, -1.0, 0.0, 0.0],
+    [0.0, 0.0, -1.0, 0.0],
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+], dtype=np.float64)
+
 
 def cam2ego_to_ego2cam(rotation_3x3, translation_3):
-    """Invert a cam->ego transform to get ego->cam.
+    """Invert a Waymo cam->ego transform to get ego->pinhole-cam.
 
     sensor2ego_rotation/translation describe how to map a point expressed in
-    the camera frame into the ego frame. MapTracker's `extrinsics` field is
-    the *inverse* convention: ego->cam (4x4 homogeneous).
+    the Waymo camera sensor frame into the ego frame. MapTracker's
+    `extrinsics` field is the inverse convention, but downstream projection
+    also expects pinhole camera axes where depth is the third coordinate.
 
     inv([[R, t], [0, 1]]) == [[R^T, -R^T @ t], [0, 1]]
     """
@@ -54,7 +65,8 @@ def cam2ego_to_ego2cam(rotation_3x3, translation_3):
     cam2ego[:3, :3] = R
     cam2ego[:3, 3] = t
 
-    return np.linalg.inv(cam2ego)
+    ego2waymo_cam = np.linalg.inv(cam2ego)
+    return WAYMO_CAM_TO_PINHOLE @ ego2waymo_cam
 
 
 def convert_cams(v3_cams, img_root):
@@ -73,6 +85,7 @@ def convert_cams(v3_cams, img_root):
             img_fpath=img_fpath,
             intrinsics=intr,
             extrinsics=ext,
+            img_shape=tuple(c['img_shape']) if 'img_shape' in c else None,
         )
     return out
 

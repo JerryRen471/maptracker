@@ -74,6 +74,37 @@ class CheckWaymoCameraProjectionTest(unittest.TestCase):
         self.assertEqual(front["grid_in_image"], 4)
         self.assertEqual(front["probe_depth_positive"], 2)
 
+    def test_waymo_camera_axis_transform_makes_forward_axis_depth(self):
+        waymo_cam_to_pinhole = [
+            [0.0, -1.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+        intrinsic = [
+            [1.0, 0.0, 5.0],
+            [0.0, 1.0, 5.0],
+            [0.0, 0.0, 1.0],
+        ]
+        waymo_sensor_extrinsic = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+        pinhole_extrinsic = CHECKER.matmul(
+            waymo_cam_to_pinhole, waymo_sensor_extrinsic)
+
+        projected = CHECKER.project_points(
+            [[10.0, 0.0, 0.0, 1.0]],
+            intrinsic,
+            pinhole_extrinsic,
+        )
+
+        self.assertEqual(projected["depth"], [10.0])
+        self.assertEqual(projected["u"], [5.0])
+        self.assertEqual(projected["v"], [5.0])
+
     def test_load_samples_accepts_dict_with_samples(self):
         payload = {"samples": [{"token": "a"}, {"token": "b"}]}
         with tempfile.TemporaryDirectory() as tmp_dir:
