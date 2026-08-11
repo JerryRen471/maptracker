@@ -5,7 +5,7 @@ sys.path.append(os.path.dirname(SCRIPT_DIR))
 
 import argparse     
 import mmcv
-from mmcv import Config
+from mmcv import Config, DictAction
 import matplotlib.transforms as transforms
 from mmdet3d.datasets import build_dataset
 import cv2
@@ -86,10 +86,68 @@ def parse_args():
         action='store_true',
         help='Whether to use transparent background'
     )
+    parser.add_argument(
+        '--draw_bev_range',
+        default=1,
+        type=int,
+        help='Whether to draw the BEV ROI range rectangle'
+    )
+    parser.add_argument(
+        '--cfg-options',
+        nargs='+',
+        action=DictAction,
+        help='override config settings in xxx=yyy format'
+    )
     
     args = parser.parse_args()
 
     return args
+
+
+def scene_has_prediction_vectors(scene_name, pred_results):
+    for result in pred_results:
+        if result.get("scene_name") != scene_name:
+            continue
+        vectors = result.get("vectors", [])
+        if vectors is not None and len(vectors) > 0:
+            return True
+    return False
+
+
+def bev_range_bounds(origin, roi_size):
+    x_min = float(origin[0])
+    y_min = float(origin[1])
+    x_max = x_min + float(roi_size[0])
+    y_max = y_min + float(roi_size[1])
+    return x_min, x_max, y_min, y_max
+
+
+def set_bev_range_args(args, origin, roi_size):
+    x_min, x_max, y_min, y_max = bev_range_bounds(origin, roi_size)
+    args.bev_x_min = x_min
+    args.bev_x_max = x_max
+    args.bev_y_min = y_min
+    args.bev_y_max = y_max
+
+
+def draw_bev_range(ax, args):
+    if not getattr(args, "draw_bev_range", 1):
+        return
+    if not all(hasattr(args, name) for name in ["bev_x_min", "bev_x_max", "bev_y_min", "bev_y_max"]):
+        return
+    x_min = args.bev_x_min
+    x_max = args.bev_x_max
+    y_min = args.bev_y_min
+    y_max = args.bev_y_max
+    ax.plot(
+        [x_min, x_max, x_max, x_min, x_min],
+        [y_min, y_min, y_max, y_max, y_min],
+        color="#f2c94c",
+        linewidth=2.5,
+        linestyle="--",
+        alpha=0.95,
+        zorder=20,
+    )
 
 def combine_images_with_labels(image_paths, labels, output_path, font_scale=0.5, font_color=(0, 0, 0)):
     # Load images
@@ -767,6 +825,7 @@ def plot_fig_merged_per_frame(num_frames, car_trajectory, x_min, x_max, y_min, y
         ax = fig.add_subplot(1, 1, 1)
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
+        draw_bev_range(ax, args)
         
         # setup the figure with car
         car_img = Image.open('resources/car-orange.png')
@@ -889,6 +948,7 @@ def plot_fig_merged(car_trajectory, x_min, x_max, y_min, y_max, pred_save_path, 
     ax = fig.add_subplot(1, 1, 1)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
+    draw_bev_range(ax, args)
     car_img = Image.open('resources/car-orange.png')
     
     faded_rate = np.linspace(0.2, 1, num=len(car_trajectory))
@@ -991,6 +1051,7 @@ def plot_fig_unmerged_per_frame(num_frames, car_trajectory, x_min, x_max, y_min,
     ax = fig.add_subplot(1, 1, 1)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
+    draw_bev_range(ax, args)
     car_img = Image.open('resources/car-orange.png')
 
 
@@ -1050,6 +1111,7 @@ def plot_fig_unmerged(car_trajectory, x_min, x_max, y_min, y_max, pred_save_path
     ax = fig.add_subplot(1, 1, 1)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
+    draw_bev_range(ax, args)
     car_img = Image.open('resources/car-orange.png')
     
     # trace the path reversely, get the sub-sampled traj for visualizing the car 
@@ -1148,6 +1210,7 @@ def save_as_video(image_list, mp4_output_path, scale=None):
 
 
 def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, args=None):
+    set_bev_range_args(args, origin, roi_size)
     
 
     # get the item index of the scene
@@ -1155,6 +1218,12 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     for index in range(len(pred_results)):
         if pred_results[index]["scene_name"] == scene_name:
             index_list.append(index)
+    if len(index_list) == 0:
+        print(f"[vis-pred] skip scene {scene_name}: no prediction entries")
+        return False
+    if not scene_has_prediction_vectors(scene_name, pred_results):
+        print(f"[vis-pred] skip scene {scene_name}: no predicted vectors")
+        return False
     
     car_trajectory = []
     id_prev2curr_pred_vectors = defaultdict(list)
@@ -1165,11 +1234,15 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     last_index = index_list[-1]
     for index in index_list:
         
-        vectors = np.array(pred_results[index]["vectors"]).reshape((len(np.array(pred_results[index]["vectors"])), 20, 2))
-        if abs(vectors.max()) <= 1:
-            curr_vectors = vectors * roi_size + origin
+        vectors_raw = np.array(pred_results[index]["vectors"])
+        if len(vectors_raw) == 0:
+            curr_vectors = np.zeros((0, 20, 2))
         else:
-            curr_vectors = vectors
+            vectors = vectors_raw.reshape((len(vectors_raw), 20, 2))
+            if abs(vectors.max()) <= 1:
+                curr_vectors = vectors * roi_size + origin
+            else:
+                curr_vectors = vectors
             
         # get the transformation matrix of the last frame
         prev_e2g_trans =  torch.tensor(pred_results[index]['meta']['ego2global_translation'], dtype=torch.float64)
@@ -1206,6 +1279,9 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     
     # sort the id_prev2curr_pred_vectors
     id_prev2curr_pred_vectors = {key: id_prev2curr_pred_vectors[key] for key in sorted(id_prev2curr_pred_vectors)}
+    if len(id_prev2curr_pred_vectors) == 0:
+        print(f"[vis-pred] skip scene {scene_name}: no drawable predicted vectors")
+        return False
 
     
     # set the size of the image
@@ -1216,8 +1292,13 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
 
     all_points = []
     for vecs in id_prev2curr_pred_vectors.values():
+        if len(vecs) == 0:
+            continue
         points = np.concatenate(vecs, axis=0)
         all_points.append(points)
+    if len(all_points) == 0:
+        print(f"[vis-pred] skip scene {scene_name}: no drawable predicted points")
+        return False
     all_points = np.concatenate(all_points, axis=0)
 
     x_min = min(x_min, all_points[:,0].min())
@@ -1243,8 +1324,10 @@ def vis_pred_data(scene_name="", pred_results=None, origin=None, roi_size=None, 
     labels = ['Merged', 'Unmerged']
     combine_images_with_labels(image_paths, labels, comb_save_path)
     print("image saved to : ", comb_save_path)
+    return True
 
 def vis_gt_data(scene_name, args, dataset, gt_data, origin, roi_size):
+    set_bev_range_args(args, origin, roi_size)
 
     gt_info = gt_data[scene_name]
     gt_info_list = []
@@ -1355,6 +1438,8 @@ def vis_gt_data(scene_name, args, dataset, gt_data, origin, roi_size):
 def main():
     args = parse_args()
     cfg = Config.fromfile(args.config)
+    if args.cfg_options is not None:
+        cfg.merge_from_dict(args.cfg_options)
     import_plugin(cfg)
     dataset = build_dataset(cfg.match_config)
 

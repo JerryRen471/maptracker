@@ -14,6 +14,8 @@ from mmdet.models.utils.transformer import inverse_sigmoid
 
 from einops import rearrange
 
+from plugin.roi import resolve_roi
+
 @HEADS.register_module(force=True)
 class MapDetectorHead(nn.Module):
 
@@ -32,6 +34,7 @@ class MapDetectorHead(nn.Module):
                  sync_cls_avg_factor=True,
                  bg_cls_weight=0.,
                  trans_loss_weight=0.0,
+                 roi_range=None,
                  transformer=dict(),
                  loss_cls=dict(),
                  loss_reg=dict(),
@@ -55,8 +58,10 @@ class MapDetectorHead(nn.Module):
         # NOTE: below is a simple MLP to transform the query from prev-frame to cur-frame,
         # we moved the propagation part outside,
             
-        self.register_buffer('roi_size', torch.tensor(roi_size, dtype=torch.float32))
-        origin = (-roi_size[0]/2, -roi_size[1]/2)
+        roi_range, roi_size = resolve_roi(roi_size, roi_range)
+        self.register_buffer(
+            'roi_size', torch.tensor(roi_size, dtype=torch.float32))
+        origin = roi_range[:2]
         self.register_buffer('origin', torch.tensor(origin, dtype=torch.float32))
 
         sampler_cfg = dict(type='PseudoSampler')
@@ -650,7 +655,7 @@ class MapDetectorHead(nn.Module):
         for i in range(bs):
             tmp_vectors = lines[i]
             # set up the prop_flags
-            tmp_prop_flags = torch.zeros(tmp_vectors.shape[0]).bool()
+            tmp_prop_flags = torch.zeros(tmp_vectors.shape[0]).bool().to(tmp_vectors.device)
             tmp_prop_flags[-100:] = 0
             tmp_prop_flags[:-100] = 1
             num_preds, num_points2 = tmp_vectors.shape
@@ -735,14 +740,14 @@ class MapDetectorHead(nn.Module):
         pos_scores = tmp_scores[pos]
 
         if first_frame:
-            global_ids = torch.arange(len(pos_vectors))
+            global_ids = torch.arange(len(pos_vectors)).to(pos_vectors.device)
             num_instance = len(pos_vectors)
         else:
             prop_ids = self.prop_info['global_ids']
             prop_num_instance = self.prop_info['num_instance']
             global_ids_track = prop_ids[pos_track]
             num_newborn = int(pos_det.sum())
-            global_ids_newborn = torch.arange(num_newborn) + prop_num_instance
+            global_ids_newborn = (torch.arange(num_newborn) + prop_num_instance).to(pos_vectors.device)
             global_ids = torch.cat([global_ids_track, global_ids_newborn])
             num_instance = prop_num_instance + num_newborn
             

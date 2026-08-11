@@ -159,10 +159,15 @@ def vis_pred_data(scene_name, args, pred_results, origin,roi_size):
 
     # iterate through each frame of the pred sequence
     for index in index_list:
-        vectors = np.array(pred_results[index]["vectors"]).reshape((len(np.array(pred_results[index]["vectors"])), 20, 2))
-        # some results are normalized, some not...
-        if np.abs(vectors).max() <= 1: 
-            vectors = vectors * roi_size + origin
+        vectors_raw = np.array(pred_results[index]["vectors"])
+        if len(vectors_raw) == 0:
+            # 空帧也要画(空图),跳过 vector 处理但要走完渲染循环
+            vectors = np.zeros((0, 20, 2))
+        else:
+            vectors = vectors_raw.reshape((len(vectors_raw), 20, 2))
+            # some results are normalized, some not...
+            if np.abs(vectors).max() <= 1:
+                vectors = vectors * roi_size + origin
         labels = np.array(pred_results[index]["labels"])
         global_ids = np.array(pred_results[index]["global_ids"])
 
@@ -199,9 +204,15 @@ def vis_pred_data(scene_name, args, pred_results, origin,roi_size):
         
         viz_image = plot_one_frame_results(curr_vectors, id_info, roi_size, scene_dir, args)
         all_viz_images.append(viz_image)
-        
+        # save per-frame PNG (use local_idx from pred_results for naming)
+        local_idx = pred_results[index].get('local_idx', len(all_viz_images)-1)
+        imageio.imwrite(os.path.join(scene_dir, f'frame_{local_idx:04d}_pred.png'), viz_image)
+
     gif_path = os.path.join(scene_dir, 'per_frame_pred.gif')
-    save_as_video(all_viz_images, gif_path)
+    try:
+        save_as_video(all_viz_images, gif_path)
+    except Exception as e:
+        print(f"[skip mp4: {e}]")
         
 def vis_gt_data(scene_name, args, dataset, scene_name2idx, gt_data, origin, roi_size):
     gt_info = gt_data[scene_name]
@@ -238,13 +249,24 @@ def vis_gt_data(scene_name, args, dataset, scene_name2idx, gt_data, origin, roi_
 
         viz_image = plot_one_frame_results(curr_vectors, id_info, roi_size, scene_dir, args)
         all_viz_images.append(viz_image)
-    
+        imageio.imwrite(os.path.join(scene_dir, f'frame_{frame_idx:04d}_gt.png'), viz_image)
+
     gif_path = os.path.join(scene_dir, 'per_frame_gt.gif')
-    save_as_video(all_viz_images, gif_path)
+    try:
+        save_as_video(all_viz_images, gif_path)
+    except Exception as e:
+        print(f"[skip mp4: {e}]")
     
     for cam_name, image_list in all_cam_images.items():
+        # save first/middle/last cam images as PNGs (sampling)
+        sample_indices = [0, len(image_list)//2, len(image_list)-1] if len(image_list)>2 else list(range(len(image_list)))
+        for si in sample_indices:
+            imageio.imwrite(os.path.join(scene_dir, f'{cam_name}_frame_{si:04d}.png'), image_list[si])
         gif_path = os.path.join(scene_dir, f'{cam_name}.gif')
-        save_as_video(image_list, gif_path, scale=0.3)
+        try:
+            save_as_video(image_list, gif_path, scale=0.3)
+        except Exception as e:
+            print(f"[skip cam {cam_name} mp4: {e}]")
     
 def main():
     args = parse_args()

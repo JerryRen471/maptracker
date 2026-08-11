@@ -56,14 +56,17 @@ class VectorInstanceMemory(nn.Module):
                  dim_in, number_ins, bank_size, mem_len, mem_select_dist_ranges
                  ):
         super().__init__()
-        self.max_number_ins = 3 * number_ins # make sure this is not exceeded at initial training when results could be quite random
+        # Full-val (interval=1) sequences are ~40 frames and can accumulate
+        # far more unique track IDs than the original 3x budget used for
+        # subsampled eval (interval=10, ~4 frames/scene).
+        self.max_number_ins = 20 * number_ins # make sure this is not exceeded at initial training when results could be quite random
         self.bank_size = bank_size
         self.mem_len = mem_len
         self.dim_in = dim_in
         self.mem_select_dist_ranges = mem_select_dist_ranges
 
         p_enc_1d = PositionalEncoding1D(dim_in)
-        fake_tensor = torch.zeros((1, 1000, dim_in)) # suppose all sequences are shorter than 1000
+        fake_tensor = torch.zeros((1, 1000, dim_in)).cuda() # suppose all sequences are shorter than 1000
         self.cached_pe = p_enc_1d(fake_tensor)[0]
 
         for p in self.parameters():
@@ -91,13 +94,13 @@ class VectorInstanceMemory(nn.Module):
         self.active_mem_ids = [None for _ in range(bs)]
         self.valid_track_idx = [None for _ in range(bs)]
         self.random_bev_masks = [None for _ in range(bs)]
-        init_entry_length = torch.tensor([0]*self.max_number_ins).long()
+        init_entry_length = torch.tensor([0]*self.max_number_ins).long().cuda()
         self.mem_entry_lengths = [init_entry_length.clone() for _ in range(bs)]
 
     def update_memory(self, batch_i, is_first_frame, propagated_ids, prev_out, num_tracks, 
                       seq_idx, timestep):
         if is_first_frame:
-            mem_instance_ids = torch.arange(propagated_ids.shape[0])
+            mem_instance_ids = torch.arange(propagated_ids.shape[0]).to(propagated_ids.device)
             track2mem_info = {i: i for i in range(len(propagated_ids))}
             num_instances = len(propagated_ids)
         else:
@@ -110,7 +113,7 @@ class VectorInstanceMemory(nn.Module):
                 else: # newborn instances
                     track2mem_info[pred_i] = num_instances
                     num_instances += 1
-            mem_instance_ids = torch.tensor([track2mem_info[item] for item in range(len(propagated_ids))]).long()
+            mem_instance_ids = torch.tensor([track2mem_info[item] for item in range(len(propagated_ids))]).long().to(propagated_ids.device)
         
         assert num_instances < self.max_number_ins, 'Number of instances larger than mem size!'
 
@@ -211,10 +214,10 @@ class VectorInstanceMemory(nn.Module):
             effective_len = mem_entry_lens[idx]
             valid_mem_trans = mem_trans[:valid_bank_size]
             trunc_eff_len = min(effective_len, self.bank_size)
-            valid_pose_ids = torch.arange(valid_bank_size-trunc_eff_len, valid_bank_size)
+            valid_pose_ids = torch.arange(valid_bank_size-trunc_eff_len, valid_bank_size).cuda()
             #print('ins {}, valid pose ids {}'.format(idx, valid_pose_ids))
             if effective_len <= self.mem_len:
-                select_indices = torch.arange(effective_len)
+                select_indices = torch.arange(effective_len).cuda()
             else:
                 select_indices = self.select_memory_entries(valid_mem_trans[-trunc_eff_len:], metas)
             pose_select_indices = valid_pose_ids[select_indices]

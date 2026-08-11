@@ -10,6 +10,8 @@ import torch
 
 import pdb
 
+from plugin.roi import resolve_roi
+
 @PIPELINES.register_module(force=True)
 class RasterizeMap(object):
     """Generate rasterized semantic map and put into 
@@ -28,9 +30,10 @@ class RasterizeMap(object):
                  thickness: int, 
                  coords_dim: int,
                  semantic_mask=False,
+                 roi_range=None,
                  ):
 
-        self.roi_size = roi_size
+        self.roi_range, self.roi_size = resolve_roi(roi_size, roi_range)
         self.canvas_size = canvas_size
         self.scale_x = self.canvas_size[0] / self.roi_size[0]
         self.scale_y = self.canvas_size[1] / self.roi_size[1]
@@ -53,8 +56,8 @@ class RasterizeMap(object):
         #     thickness (int): thickness of rasterized lines, default: 3
         # """
 
-        trans_x = self.canvas_size[0] / 2
-        trans_y = self.canvas_size[1] / 2
+        trans_x = -self.roi_range[0] * self.scale_x
+        trans_y = -self.roi_range[1] * self.scale_y
         line_ego = affinity.scale(line_ego, self.scale_x, self.scale_y, origin=(0, 0))
         line_ego = affinity.affine_transform(line_ego, [1.0, 0.0, 0.0, 1.0, trans_x, trans_y])
         
@@ -83,8 +86,8 @@ class RasterizeMap(object):
 
         #mask = Image.new("L", size=(self.canvas_size[0], self.canvas_size[1]), color=0) 
         # Image lib api expect size as (w, h)
-        trans_x = self.canvas_size[0] / 2
-        trans_y = self.canvas_size[1] / 2
+        trans_x = -self.roi_range[0] * self.scale_x
+        trans_y = -self.roi_range[1] * self.scale_y
         masks = []
         for polygon in polygons:
             mask = Image.new("L", size=(self.canvas_size[0], self.canvas_size[1]), color=0) 
@@ -159,6 +162,7 @@ class RasterizeMap(object):
     def __repr__(self):
         repr_str = self.__class__.__name__
         repr_str += f'(roi_size={self.roi_size}, '
+        repr_str += f'roi_range={self.roi_range}, '
         repr_str += f'canvas_size={self.canvas_size}), '
         repr_str += f'thickness={self.thickness}), ' 
         repr_str += f'coords_dim={self.coords_dim})'

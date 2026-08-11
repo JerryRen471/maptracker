@@ -4,6 +4,8 @@ from shapely.geometry import LineString
 from numpy.typing import NDArray
 from typing import List, Tuple, Union, Dict
 
+from plugin.roi import normalize_points, resolve_roi
+
 @PIPELINES.register_module(force=True)
 class VectorizeMap(object):
     """Generate vectoized map and put into `semantic_mask` key.
@@ -27,12 +29,13 @@ class VectorizeMap(object):
                  simplify: bool=False, 
                  sample_num: int=-1, 
                  sample_dist: float=-1, 
-                 permute: bool=False
+                 permute: bool=False,
+                 roi_range=None,
         ):
         self.coords_dim = coords_dim
         self.sample_num = sample_num
         self.sample_dist = sample_dist
-        self.roi_size = np.array(roi_size)
+        self.roi_range, self.roi_size = resolve_roi(roi_size, roi_range)
         self.normalize = normalize
         self.simplify = simplify
         self.permute = permute
@@ -128,13 +131,9 @@ class VectorizeMap(object):
             normalized (array): normalized points.
         '''
 
-        origin = -np.array([self.roi_size[0]/2, self.roi_size[1]/2])
-
-        line[:, :2] = line[:, :2] - origin
-
-        # transform from range [0, 1] to (0, 1)
         eps = 1e-5
-        line[:, :2] = line[:, :2] / (self.roi_size + eps)
+        line[:, :2] = normalize_points(
+            line[:, :2], self.roi_range, self.roi_size + eps)
 
         return line
     
@@ -185,6 +184,7 @@ class VectorizeMap(object):
         repr_str += f'sample_num={self.sample_num}), '
         repr_str += f'sample_dist={self.sample_dist}), ' 
         repr_str += f'roi_size={self.roi_size})'
+        repr_str += f'roi_range={self.roi_range})'
         repr_str += f'normalize={self.normalize})'
         repr_str += f'coords_dim={self.coords_dim})'
 

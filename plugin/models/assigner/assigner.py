@@ -89,8 +89,10 @@ class HungarianLinesAssigner(BaseAssigner):
             if num_gts == 0:
                 # No ground truth, assign all to background
                 assigned_gt_inds[:] = 0
+            matched_reg_cost = preds['lines'].new_empty((0,))
             return AssignResult(
-                num_gts, assigned_gt_inds, None, labels=assigned_labels), None
+                num_gts, assigned_gt_inds, None,
+                labels=assigned_labels), None, matched_reg_cost
 
         # 2. compute the weighted costs
         gt_permute_idx = None # (num_preds, num_gts)

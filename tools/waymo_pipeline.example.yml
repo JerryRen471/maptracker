@@ -1,0 +1,72 @@
+paths:
+  conda_home: /root/miniconda3
+  waymo_env: waymo_pack
+  train_env: maptracker
+  waymo_train_dir: /data8012/waymo/training
+  waymo_val_dir: /data8012/waymo/validation
+  processed_dir: /data/waymo_processed_xm15_x45_y15
+  maptracker_dir: /data/waymo_maptracker_xm15_x45_y15
+  work_root: /data/maptr_workspace/work_dirs
+  reuse_images_from: /data/waymo_processed_v3
+  mmdet3d_dir: null
+  extra_pythonpath: []
+
+configs:
+  stage1: plugin/configs/maptracker/waymo_5cam/maptracker_waymo_5cam_5frame_span10_stage1_bev_pretrain.py
+  stage2: null
+  stage3: null
+
+roi:
+  x_min: -15
+  y_min: -15
+  x_max: 45
+  y_max: 15
+
+convert:
+  frame_stride: 5
+  num_points: 20
+  num_workers: 8
+
+runtime:
+  gpus: "0,1,2,3"
+  num_gpus: 4
+  exp_tag: asym_roi
+  dry_run: false
+  init_ckpt: null
+
+generated_configs:
+  enabled: true
+  out_dir: null
+  overwrite: true
+  schedule:
+    auto_from_data: true
+    batch_size: null
+    num_epochs: null
+    num_iters_per_epoch: null
+    min_iters_per_epoch: 1
+    update_evaluation: true
+    update_checkpoint: true
+    adjust_warmup: true
+    warmup_ratio: 0.1
+
+subset:
+  enabled: false
+  output_dir: /data/waymo_maptracker_xm15_x45_y15_overfit6
+  num_scenes: 6
+  scenes: []
+
+visualize:
+  scene_ids: []
+  per_frame_result: 1
+  overwrite: 1
+  draw_bev_range: true
+  semantic:
+    enabled: true
+    stage: stage1
+    split: val
+    out_dir: null
+    max_frames: 24
+    workers_per_gpu: 0
+    device_id: 0
+    score_dpi: 140
+    score_heatmaps: true

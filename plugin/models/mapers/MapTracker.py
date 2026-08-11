@@ -16,6 +16,8 @@ from einops import rearrange, repeat
 from scipy.spatial.transform import Rotation as R
 
 from .vector_memory import VectorInstanceMemory
+from plugin.roi import resolve_roi
+from plugin.temporal_visibility import build_temporal_supervision_mask
 
 
 @MAPPERS.register_module()
@@ -25,6 +27,7 @@ class MapTracker(BaseMapper):
                  bev_h,
                  bev_w,
                  roi_size,
+                 roi_range=None,
                  backbone_cfg=dict(),
                  head_cfg=dict(),
                  neck_cfg=None,
@@ -74,7 +77,9 @@ class MapTracker(BaseMapper):
         # BEV 
         self.bev_h = bev_h
         self.bev_w = bev_w
-        self.roi_size = roi_size
+        roi_range, roi_size = resolve_roi(roi_size, roi_range)
+        self.roi_size = tuple(float(v) for v in roi_size)
+        self.roi_range = tuple(float(v) for v in roi_range)
         self.history_steps = history_steps
 
         self.mem_len = mem_len
@@ -96,8 +101,7 @@ class MapTracker(BaseMapper):
                 mem_select_dist_ranges=self.mem_select_dist_ranges,
             )
 
-        xmin, xmax = -roi_size[0]/2, roi_size[0]/2
-        ymin, ymax = -roi_size[1]/2, roi_size[1]/2
+        xmin, ymin, xmax, ymax = roi_range
         x = torch.linspace(xmin, xmax, bev_w)
         y = torch.linspace(ymax, ymin, bev_h)
         y, x = torch.meshgrid(y, x)
@@ -107,6 +111,48 @@ class MapTracker(BaseMapper):
         self.register_buffer('plane', plane.double())
         
         self.init_weights(pretrained)
+
+    def get_bev_visibility_mask(self, img_metas, device):
+        """Return BEV cells visible in at least one camera.
+
+        The mask is defined on the model BEV grid and uses ground-plane
+        points because the semantic map labels are rasterized on z=0.
+        """
+        masks = []
+        plane = self.plane.to(device=device, dtype=torch.float32)
+        eps = 1e-5
+
+        for img_meta in img_metas:
+            ego2img = torch.as_tensor(
+                np.asarray(img_meta['ego2img']),
+                dtype=torch.float32,
+                device=device)
+            proj = torch.einsum('nij,hwj->nhwi', ego2img, plane)
+            depth = proj[..., 2]
+            denom = torch.maximum(
+                depth,
+                torch.ones_like(depth) * eps)
+            u = proj[..., 0] / denom
+            v = proj[..., 1] / denom
+
+            img_shapes = img_meta['img_shape']
+            cam_masks = []
+            for cam_idx in range(ego2img.shape[0]):
+                shape = img_shapes[cam_idx] if isinstance(img_shapes, list) else img_shapes
+                img_h = float(shape[0])
+                img_w = float(shape[1])
+                # print((depth[cam_idx] > eps).sum().item())
+                cam_visible = (
+                    (depth[cam_idx] > eps)
+                    & (u[cam_idx] > 0.0)
+                    & (u[cam_idx] < img_w)
+                    & (v[cam_idx] > 0.0)
+                    & (v[cam_idx] < img_h)
+                )
+                cam_masks.append(cam_visible)
+            masks.append(torch.stack(cam_masks, dim=0).any(dim=0))
+
+        return torch.stack(masks, dim=0).to(dtype=torch.float32)
 
     def init_weights(self, pretrained=None):
         """Initialize model weights."""
@@ -330,9 +376,12 @@ class MapTracker(BaseMapper):
 
             history_coord = torch.einsum('nlk,ijk->nijl', history_curr2prev_matrix, self.plane).float()[..., :2]
 
-            # from (-30, 30) or (-15, 15) to (-1, 1)
-            history_coord[..., 0] = history_coord[..., 0] / (self.roi_size[0]/2)
-            history_coord[..., 1] = -history_coord[..., 1] / (self.roi_size[1]/2)
+            history_coord[..., 0] = (
+                (history_coord[..., 0] - self.roi_range[0])
+                / self.roi_size[0] * 2 - 1)
+            history_coord[..., 1] = -(
+                (history_coord[..., 1] - self.roi_range[1])
+                / self.roi_size[1] * 2 - 1)
 
             all_history_curr2prev.append(history_curr2prev_matrix)
             all_history_prev2curr.append(history_prev2curr_matrix)
@@ -400,6 +449,7 @@ class MapTracker(BaseMapper):
         # History records for bev features
         history_bev_feats = []
         history_img_metas = []
+        history_visible_masks = []
         
         gt_semantic = torch.flip(semantic_mask, [2,])
 
@@ -411,8 +461,11 @@ class MapTracker(BaseMapper):
             all_history_curr2prev, all_history_prev2curr, all_history_coord =  \
                     self.process_history_info(all_img_metas_prev[t], history_img_metas)
 
-            _bev_feats, mlvl_feats = self.backbone(all_img_prev[t], all_img_metas_prev[t], t, history_bev_feats, 
-                        history_img_metas, all_history_coord, points=None, 
+            _bev_feats, mlvl_feats, warped_history_visible_union = \
+                    self.backbone(all_img_prev[t], all_img_metas_prev[t], t, history_bev_feats,
+                        history_img_metas, all_history_coord, points=None,
+                        history_visible_masks=history_visible_masks,
+                        return_history_visibility=True,
                         img_backbone_gradient=img_backbone_gradient)
 
             # Neck for prev
@@ -449,15 +502,22 @@ class MapTracker(BaseMapper):
             local2global_next = all_local2global_info[t+1]
 
             # Compute the semantic segmentation loss
+            visible_mask_prev = self.get_bev_visibility_mask(
+                img_metas_prev, bev_feats.device)
+            supervision_mask_prev = build_temporal_supervision_mask(
+                visible_mask_prev, warped_history_visible_union)
             seg_preds, seg_feats, seg_loss, seg_dice_loss = self.seg_decoder(bev_feats, gts_semantic_prev,
-                    all_history_coord, return_loss=True)
+                    all_history_coord, visible_mask=supervision_mask_prev,
+                    return_loss=True)
 
             # Save the history 
             history_bev_feats.append(bev_feats)
             history_img_metas.append(all_img_metas_prev[t])
+            history_visible_masks.append(visible_mask_prev.detach())
             if len(history_bev_feats) > self.history_steps:
                 history_bev_feats.pop(0)
                 history_img_metas.pop(0)
+                history_visible_masks.pop(0)
             
             if not self.skip_vector_head:
                 # Prepare the two-frame instance matching info
@@ -507,8 +567,11 @@ class MapTracker(BaseMapper):
 
         all_history_curr2prev, all_history_prev2curr, all_history_coord = self.process_history_info(img_metas, history_img_metas)
 
-        _bev_feats, mlvl_feats = self.backbone(img, img_metas, num_prev_frames, history_bev_feats, history_img_metas, all_history_coord,
-                    points=None, img_backbone_gradient=img_backbone_gradient)
+        _bev_feats, mlvl_feats, warped_history_visible_union = \
+                self.backbone(img, img_metas, num_prev_frames, history_bev_feats, history_img_metas, all_history_coord,
+                    points=None, history_visible_masks=history_visible_masks,
+                    return_history_visibility=True,
+                    img_backbone_gradient=img_backbone_gradient)
         # Neck for curr
         bev_feats = self.neck(_bev_feats)
 
@@ -532,8 +595,11 @@ class MapTracker(BaseMapper):
             #import pdb; pdb.set_trace()
             ########################################################
 
+        visible_mask = self.get_bev_visibility_mask(img_metas, bev_feats.device)
+        supervision_mask = build_temporal_supervision_mask(
+            visible_mask, warped_history_visible_union)
         seg_preds, seg_feats, seg_loss, seg_dice_loss = self.seg_decoder(bev_feats, gt_semantic, 
-                all_history_coord, return_loss=True)
+                all_history_coord, visible_mask=supervision_mask, return_loss=True)
         
         if not self.skip_vector_head:
             memory_bank = self.memory_bank if _use_memory else None
@@ -698,7 +764,6 @@ class MapTracker(BaseMapper):
         for idx in range(bs):
             num_gts.append(sum([len(v) for k, v in vectors[idx].items()]))
         valid_idx = [i for i in range(bs) if num_gts[i] > 0]
-        assert len(valid_idx) == bs # make sure every sample has gts
 
         all_labels_list = []
         all_lines_list = []
@@ -723,7 +788,13 @@ class MapTracker(BaseMapper):
                         assert False
 
             all_labels_list.append(torch.tensor(labels, dtype=torch.long).to(device))
-            all_lines_list.append(torch.stack(lines).float().to(device))
+            if lines:
+                lines_tensor = torch.stack(lines).float().to(device)
+            else:
+                line_dim = self.head.num_points * self.head.coord_dim
+                lines_tensor = torch.empty(
+                    (0, line_dim), dtype=torch.float32, device=device)
+            all_lines_list.append(lines_tensor)
             all_gt2local.append(gt2local)
             all_local2gt.append(local2gt)
 
@@ -765,8 +836,8 @@ class MapTracker(BaseMapper):
     
     def _compute_cur2prev(self, gt2local_curr, gt2local_prev, local2gt_prev, 
                           local2global_curr, global2local_prev):
-        cur2prev = torch.zeros(len(gt2local_curr))
-        prev2cur = torch.zeros(len(gt2local_prev))
+        cur2prev = torch.zeros(len(gt2local_curr)).to(gt2local_curr.device if hasattr(gt2local_curr, "device") else "cuda")
+        prev2cur = torch.zeros(len(gt2local_prev)).to(gt2local_prev.device if hasattr(gt2local_prev, "device") else "cuda")
         prev2cur[:] = -1
         for gt_idx_curr in range(len(gt2local_curr)):
             label = gt2local_curr[gt_idx_curr][0]
@@ -841,7 +912,7 @@ class MapTracker(BaseMapper):
             not_prev_out_ind = torch.tensor([
                 ind.item()
                 for ind in not_prev_out_ind
-                if ind not in prev_out_ind and ind < pad_bound])
+                if ind not in prev_out_ind and ind < pad_bound]).to(device)
             
             # Get all non-matched pred with >0.5 conf score, serve as FP
             neg_scores = scores[not_prev_out_ind]
@@ -857,7 +928,7 @@ class MapTracker(BaseMapper):
 
             false_out_ind = not_prev_out_ind[fp_select_mask]
 
-            prev_out_ind_final = torch.tensor(prev_out_ind_filtered.tolist() + false_out_ind.tolist()).long()
+            prev_out_ind_final = torch.tensor(prev_out_ind_filtered.tolist() + false_out_ind.tolist()).long().to(device)
             target_ind_matching = torch.cat([
                 target_ind_matching,
                 torch.tensor([False, ] * len(false_out_ind)).bool().to(device)
@@ -953,18 +1024,18 @@ class MapTracker(BaseMapper):
     
     def _denorm_lines(self, line_pts):
         """from (0,1) to the BEV space in meters"""
-        line_pts[..., 0] = line_pts[..., 0] * self.roi_size[0] \
-                        - self.roi_size[0] / 2 
-        line_pts[..., 1] = line_pts[..., 1] * self.roi_size[1] \
-                        - self.roi_size[1] / 2 
+        line_pts[..., 0] = (
+            line_pts[..., 0] * self.roi_size[0] + self.roi_range[0])
+        line_pts[..., 1] = (
+            line_pts[..., 1] * self.roi_size[1] + self.roi_range[1])
         return line_pts
 
     def _norm_lines(self, line_pts):
         """from the BEV space in meters to (0,1) """
-        line_pts[..., 0] = (line_pts[..., 0] + self.roi_size[0] / 2) \
-                                        / self.roi_size[0] 
-        line_pts[..., 1] = (line_pts[..., 1] + self.roi_size[1] / 2) \
-                                        / self.roi_size[1] 
+        line_pts[..., 0] = (
+            line_pts[..., 0] - self.roi_range[0]) / self.roi_size[0]
+        line_pts[..., 1] = (
+            line_pts[..., 1] - self.roi_range[1]) / self.roi_size[1]
         return line_pts
 
     def _process_track_query_info(self, track_info):

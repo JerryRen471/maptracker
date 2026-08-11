@@ -11,6 +11,11 @@ from .bevformer.grid_mask import GridMask
 from mmdet3d.models import builder
 from contextlib import nullcontext
 
+from plugin.temporal_visibility import (
+    gate_history_bev_features,
+    warp_history_visibility_masks,
+)
+
 
 class UpsampleBlock(nn.Module):
     def __init__(self, ins, outs):
@@ -156,7 +161,8 @@ class BEVFormerBackbone(nn.Module):
         
         return img_feats_reshaped
 
-    def forward(self, img, img_metas, timestep, history_bev_feats, history_img_metas, all_history_coord, *args, prev_bev=None, 
+    def forward(self, img, img_metas, timestep, history_bev_feats, history_img_metas, all_history_coord, *args, prev_bev=None,
+                history_visible_masks=None, return_history_visibility=False,
                 img_backbone_gradient=True, **kwargs):
         """Forward function.
         Args:
@@ -183,6 +189,9 @@ class BEVFormerBackbone(nn.Module):
         bev_queries = self.bev_embedding.weight.to(dtype)
 
         # Prepare the transformed history bev features, add the bev prop fusion here
+        warped_history_visible_masks = None
+        warped_history_visible_union = None
+        prop_bev_mask = None
         if len(history_bev_feats) > 0:
             all_warped_history_feat = []
             for b_i in range(bs):
@@ -192,6 +201,21 @@ class BEVFormerBackbone(nn.Module):
                             history_coord, padding_mode='zeros', align_corners=False)
                 all_warped_history_feat.append(warped_history_feat_i)
             all_warped_history_feat = torch.stack(all_warped_history_feat, dim=0) # BTCHW
+
+            if history_visible_masks is not None:
+                warped_history_visible_masks, warped_history_visible_union = \
+                    warp_history_visibility_masks(
+                        history_visible_masks, all_history_coord)
+                warped_history_visible_masks = warped_history_visible_masks.to(
+                    device=all_warped_history_feat.device,
+                    dtype=all_warped_history_feat.dtype)
+                warped_history_visible_union = warped_history_visible_union.to(
+                    device=all_warped_history_feat.device,
+                    dtype=all_warped_history_feat.dtype)
+                all_warped_history_feat = gate_history_bev_features(
+                    all_warped_history_feat, warped_history_visible_masks)
+                prop_bev_mask = warped_history_visible_masks[:, -1]
+
             prop_bev_feat = all_warped_history_feat[:, -1]
         else:
             all_warped_history_feat = None
@@ -219,6 +243,7 @@ class BEVFormerBackbone(nn.Module):
                             self.real_w / self.bev_w),
                 bev_pos=bev_pos,
                 prop_bev=prop_bev_feat,
+                prop_bev_mask=prop_bev_mask,
                 img_metas=img_metas,
                 prev_bev=prev_bev,
                 warped_history_bev=all_warped_history_feat,
@@ -229,4 +254,6 @@ class BEVFormerBackbone(nn.Module):
         if self.upsample:
             outs = self.up(outs)
         
+        if return_history_visibility:
+            return outs, mlvl_feats, warped_history_visible_union
         return outs, mlvl_feats
