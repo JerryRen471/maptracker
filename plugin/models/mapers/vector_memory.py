@@ -56,7 +56,10 @@ class VectorInstanceMemory(nn.Module):
                  dim_in, number_ins, bank_size, mem_len, mem_select_dist_ranges
                  ):
         super().__init__()
-        self.max_number_ins = 3 * number_ins # make sure this is not exceeded at initial training when results could be quite random
+        # Full-val (interval=1) sequences are ~40 frames and can accumulate
+        # far more unique track IDs than the original 3x budget used for
+        # subsampled eval (interval=10, ~4 frames/scene).
+        self.max_number_ins = 20 * number_ins # make sure this is not exceeded at initial training when results could be quite random
         self.bank_size = bank_size
         self.mem_len = mem_len
         self.dim_in = dim_in

@@ -41,6 +41,27 @@ class PackWaymoForMapTrackerTest(unittest.TestCase):
 
         self.assertEqual(converted["FRONT"]["img_shape"], (1280, 1920))
 
+    def test_validate_roi_accepts_matching_asym_metadata(self):
+        metadata = {
+            "roi_range": (-15.0, -15.0, 45.0, 15.0),
+            "bev_x": 30.0,
+            "bev_y": 15.0,
+        }
+        samples = [{
+            "token": "ok",
+            "gt_polylines": [np.array([[-15.0, -15.0], [45.0, 15.0]], dtype=np.float32)],
+        }]
+        PACKER.validate_roi(metadata, samples, (-15, -15, 45, 15))
+
+    def test_validate_roi_rejects_legacy_v3_half_extents(self):
+        metadata = {"bev_x": 15.0, "bev_y": 30.0}
+        samples = [{
+            "token": "bad",
+            "gt_polylines": [np.array([[-15.0, -30.0], [15.0, 30.0]], dtype=np.float32)],
+        }]
+        with self.assertRaises(ValueError):
+            PACKER.validate_roi(metadata, samples, (-15, -15, 45, 15))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -141,6 +141,7 @@ class MapTracker(BaseMapper):
                 shape = img_shapes[cam_idx] if isinstance(img_shapes, list) else img_shapes
                 img_h = float(shape[0])
                 img_w = float(shape[1])
+                # print((depth[cam_idx] > eps).sum().item())
                 cam_visible = (
                     (depth[cam_idx] > eps)
                     & (u[cam_idx] > 0.0)

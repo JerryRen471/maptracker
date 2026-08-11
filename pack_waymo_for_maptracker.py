@@ -14,10 +14,11 @@ pack_waymo_for_maptracker.py
   5. 新增 sample_idx            全局递增,segment 内 frame_idx 顺序排列
 
 用法:
+    # Prefer the ROI-correct processed dir (e.g. xm15_x45_y15), not legacy v3:
     python pack_waymo_for_maptracker.py \
-        --v3-dir /data/waymo_processed_v3 \
-        --out-dir /data/waymo_maptracker \
-        --img-root /data/waymo_processed_v3
+        --v3-dir /data/waymo_processed_xm15_x45_y15 \
+        --out-dir /data/waymo_maptracker_xm15_x45_y15_pinhole \
+        --expect-roi-range -15 -15 45 15
 """
 import argparse
 import os
@@ -90,6 +91,53 @@ def convert_cams(v3_cams, img_root):
     return out
 
 
+def validate_roi(metadata, samples, expect_roi_range, atol=1e-3):
+    """Ensure packed metadata/GT match the expected ego-frame ROI.
+
+    Raises ValueError when metadata disagrees or any GT point falls outside.
+    """
+    expect = tuple(float(v) for v in expect_roi_range)
+    if len(expect) != 4:
+        raise ValueError(f'expect_roi_range must be length 4, got {expect}')
+    x_min, y_min, x_max, y_max = expect
+
+    meta_roi = metadata.get('roi_range')
+    if meta_roi is not None:
+        got = tuple(float(v) for v in meta_roi)
+        if got != expect:
+            raise ValueError(
+                f"metadata.roi_range {got} != --expect-roi-range {expect}. "
+                f"Did you pack from the wrong --v3-dir?"
+            )
+
+    # Legacy packs only store half-extents; catch swapped / wrong symmetric ROI.
+    if 'bev_x' in metadata and 'bev_y' in metadata:
+        bev_x = float(metadata['bev_x'])
+        bev_y = float(metadata['bev_y'])
+        expect_bev_x = (x_max - x_min) / 2.0
+        expect_bev_y = (y_max - y_min) / 2.0
+        if abs(bev_x - expect_bev_x) > atol or abs(bev_y - expect_bev_y) > atol:
+            raise ValueError(
+                f"metadata bev_x/bev_y=({bev_x}, {bev_y}) incompatible with "
+                f"expect ROI {expect} (half-extents "
+                f"{expect_bev_x}, {expect_bev_y}). Wrong source ROI?"
+            )
+
+    for sample in samples:
+        for poly in sample.get('gt_polylines', []):
+            pts = np.asarray(poly, dtype=np.float64)
+            if pts.size == 0:
+                continue
+            if (pts[:, 0].min() < x_min - atol or pts[:, 0].max() > x_max + atol or
+                    pts[:, 1].min() < y_min - atol or pts[:, 1].max() > y_max + atol):
+                raise ValueError(
+                    f"GT point outside expect ROI {expect} in token="
+                    f"{sample.get('token')}: "
+                    f"x[{pts[:, 0].min()}, {pts[:, 0].max()}] "
+                    f"y[{pts[:, 1].min()}, {pts[:, 1].max()}]"
+                )
+
+
 def convert_split(v3_infos, img_root, split_name):
     """Convert one split's list of frame dicts to a MapTracker samples list."""
 
@@ -152,7 +200,10 @@ def convert_split(v3_infos, img_root, split_name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--v3-dir', default='/data/waymo_processed_v3')
+    parser.add_argument(
+        '--v3-dir',
+        default='/data/waymo_processed_xm15_x45_y15',
+        help='Processed infos dir (must already have the desired ROI GT).')
     parser.add_argument('--out-dir', default='/data/waymo_maptracker')
     parser.add_argument(
         '--img-root',
@@ -160,6 +211,14 @@ def main():
         help='Joined to cams[*].data_path. Defaults to metadata.image_root '
              'from each input pkl.')
     parser.add_argument('--info-prefix', default='waymo')
+    parser.add_argument(
+        '--expect-roi-range',
+        nargs=4,
+        type=float,
+        default=None,
+        metavar=('X_MIN', 'Y_MIN', 'X_MAX', 'Y_MAX'),
+        help='If set, fail when source metadata/GT do not match this ROI. '
+             'Use this to avoid packing from a wrong processed dir.')
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -173,11 +232,19 @@ def main():
         with open(in_path, 'rb') as f:
             v3 = pickle.load(f)
 
-        metadata = v3.get('metadata', {})
+        metadata = dict(v3.get('metadata', {}))
         img_root = args.img_root
         if img_root is None:
             img_root = metadata.get('image_root', args.v3_dir)
+        print(f'img_root     : {img_root}')
+        print(f'src metadata : {metadata}')
         samples = convert_split(v3['infos'], img_root, split)
+
+        if args.expect_roi_range is not None:
+            print(f'validating ROI {tuple(args.expect_roi_range)} ...')
+            validate_roi(metadata, samples, args.expect_roi_range)
+            # Persist explicit roi_range even if source only had bev half-extents.
+            metadata['roi_range'] = tuple(float(v) for v in args.expect_roi_range)
 
         # id2map kept as empty dict — WaymoDataset overrides get_sample()
         # to bypass map_extractor and read polylines directly from each sample.

@@ -939,6 +939,11 @@ def command_specs(cfg: PipelineConfig, steps: list[str]) -> list[CommandSpec]:
                 cfg.paths["processed_dir"],
                 "--out-dir",
                 cfg.paths["maptracker_dir"],
+                "--expect-roi-range",
+                cfg.roi["x_min"],
+                cfg.roi["y_min"],
+                cfg.roi["x_max"],
+                cfg.roi["y_max"],
             ]
             specs.append(CommandSpec(step, command_with_env(cfg, cfg.paths["train_env"], shell_join(args)), cfg.paths["train_env"]))
         elif step == "subset":
